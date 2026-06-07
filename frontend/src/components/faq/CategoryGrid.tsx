@@ -40,7 +40,7 @@ export function CategoryCard({ name, items, onOpen }: CategoryCardProps) {
       )}
 
       <div className="mt-4">
-        <p className="text-[11px] font-semibold text-ink-faint uppercase tracking-wide">Top questions</p>
+        <p className="text-[11px] font-semibold text-accent uppercase tracking-wide">TOP QUESTIONS</p>
         <ul className="mt-2 space-y-1.5">
           {previewPrimary.map((item) => (
             <li key={item._id} className="text-xs text-ink-soft line-clamp-1">
@@ -61,15 +61,12 @@ export function CategoryCard({ name, items, onOpen }: CategoryCardProps) {
         )}
       </div>
 
-      <div className="mt-4 flex items-center justify-between text-xs text-ink-faint">
+      <div className="mt-4 flex items-center gap-1 text-xs text-accent font-medium">
         <span>Explore category</span>
-        <span className="text-accent opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center gap-1">
-          View all
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="5" y1="12" x2="19" y2="12" />
-            <polyline points="12 5 19 12 12 19" />
-          </svg>
-        </span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="5" y1="12" x2="19" y2="12" />
+          <polyline points="12 5 19 12 12 19" />
+        </svg>
       </div>
     </button>
   );

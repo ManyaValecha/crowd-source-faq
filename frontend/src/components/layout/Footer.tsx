@@ -26,6 +26,7 @@ export default function Footer() {
             { label: 'Home', to: '/' },
             { label: 'FAQ', to: '/faq' },
             { label: 'Community', to: '/community' },
+            { label: 'Leaderboard', to: '/leaderboard' },
           ].map(({ label, to }) => (
             <Link
               key={to}
@@ -62,10 +63,8 @@ export default function Footer() {
             aria-label="samagama.in"
             className="text-ink-faint hover:text-ink transition-colors"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.8 7.2h-1.6c-.18-.72-.54-1.2-1.2-1.2-.84 0-1.2.6-1.2 1.8v1.2h2.4l-.36 2.4H12.8V18h-2.4v-5.6H8.8v-2.4h1.6v-1.2c0-1.92 1.08-3 3-3 .84 0 1.56.12 2.4.36v2.04z"/>
             </svg>
           </a>
         </div>

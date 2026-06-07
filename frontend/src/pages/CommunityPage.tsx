@@ -259,17 +259,34 @@ export default function CommunityPage() {
               </p>
             )}
           </div>
-          <button
-            onClick={handleAskQuestion}
-            id="ask-question-btn"
-            className="btn-community-ask"
-          >
-            <svg className="flex-shrink-0" width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M7 2V12M2 7H12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-            </svg>
-            <span className="hidden sm:inline">Ask a Question</span>
-            <span className="sm:hidden">Ask</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Share button */}
+            <button
+              className="w-9 h-9 rounded-xl border border-border bg-card flex items-center justify-center text-ink-faint hover:text-ink hover:border-accent/30 transition-all"
+              aria-label="Share"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="18" cy="5" r="3"/>
+                <circle cx="6" cy="12" r="3"/>
+                <circle cx="18" cy="19" r="3"/>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+              </svg>
+            </button>
+            {/* Synced Content button */}
+            <button
+              onClick={handleAskQuestion}
+              id="ask-question-btn"
+              className="btn-community-ask"
+            >
+              <svg className="flex-shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="23 4 23 10 17 10"/>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+              </svg>
+              <span className="hidden sm:inline">Synced Content</span>
+              <span className="sm:hidden">Sync</span>
+            </button>
+          </div>
         </div>
 
         <CommunityHealth />
@@ -305,8 +322,8 @@ export default function CommunityPage() {
             <div className="flex gap-1 p-1 bg-mist rounded-xl w-fit">
               {[
                 { key: 'all', label: 'All' },
-                { key: 'answered', label: 'Answered' },
-                { key: 'unanswered', label: 'Open' },
+                { key: 'unanswered', label: 'Unanswered' },
+                { key: 'open', label: 'Open' },
               ].map(({ key, label }) => (
                 <button
                   key={key}
@@ -324,10 +341,10 @@ export default function CommunityPage() {
               onChange={(e) => setSort(e.target.value)}
               className="px-3 py-1.5 rounded-xl border border-border bg-card text-xs text-ink-soft focus:outline-none focus:ring-2 focus:ring-accent/25 cursor-pointer"
             >
-              <option value="newest">Newest first</option>
-              <option value="oldest">Oldest first</option>
-              <option value="popular">Most upvoted</option>
-              <option value="discussed">Most commented</option>
+              <option value="newest">Newest First</option>
+              <option value="oldest">Oldest First</option>
+              <option value="popular">Most Upvoted</option>
+              <option value="discussed">Most Commented</option>
             </select>
           </div>
         )}

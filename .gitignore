@@ -170,3 +170,10 @@ scraper.js
 session_*.txt
 main_log.txt
 server-debug.log
+
+# ==============================================================================
+# Ignore Vite timestamp backups
+# ==============================================================================
+frontend/vite.config.ts.timestamp-*
+*.mjs
+

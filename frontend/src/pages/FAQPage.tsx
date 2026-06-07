@@ -351,7 +351,7 @@ export default function FAQPage() {
       <main className="max-w-[1200px] mx-auto px-4 sm:px-6 pt-20 sm:pt-24 pb-10 relative z-10">
         <div className="mb-6 sm:mb-8 text-center">
           <h1 className="text-2xl sm:text-3xl font-serif text-ink tracking-tight">
-            Intern FAQs — solved
+            Intern FAQs — <span className="text-accent">solved</span>
           </h1>
           {total > 0 && (
             <p className="mt-2 text-sm text-ink-soft">

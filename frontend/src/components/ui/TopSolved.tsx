@@ -12,6 +12,14 @@ interface SolvedPost {
   comments?: unknown[];
   author?: { name?: string };
   updatedAt: string;
+  confidence?: string;
+}
+
+function getConfidence(post: SolvedPost): { label: string; color: string } {
+  if (post.confidence === 'high' || (post.upvotes && post.upvotes.length >= 2)) {
+    return { label: 'High Confidence', color: 'bg-success-light text-success' };
+  }
+  return { label: 'Medium Confidence', color: 'bg-warning-light text-warning' };
 }
 
 function formatRelativeTime(dateStr: string): string {
@@ -97,12 +105,11 @@ export default function TopSolved() {
     return (
       <section className="mt-14">
         <div className="flex items-center gap-2 mb-5">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1f1f1f" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <circle cx="12" cy="12" r="6"/>
-            <circle cx="12" cy="12" r="2"/>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="text-accent" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
           </svg>
-          <h2 className="font-serif text-xl text-ink">Solved Recently</h2>
+          <h2 className="font-serif text-xl text-ink">Top Solved Today</h2>
         </div>
         <div className="bg-card rounded-2xl border border-border p-8 text-center">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-success-light mb-3">
@@ -127,16 +134,15 @@ export default function TopSolved() {
     <section className="mt-14">
       <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-2">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1f1f1f" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10"/>
-            <circle cx="12" cy="12" r="6"/>
-            <circle cx="12" cy="12" r="2"/>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="text-accent" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
           </svg>
-          <h2 className="font-serif text-xl text-ink">Solved Recently</h2>
+          <h2 className="font-serif text-xl text-ink">Top Solved Today</h2>
         </div>
         <button
           onClick={() => navigate('/community')}
-          className="flex items-center gap-1 text-sm text-ink-soft hover:text-accent transition-colors cursor-pointer"
+          className="flex items-center gap-1 text-sm text-accent font-medium hover:text-accent/80 transition-colors cursor-pointer"
         >
           View all
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -168,14 +174,24 @@ export default function TopSolved() {
             </h3>
 
             {/* Answer excerpt */}
-            {post.answer && (
-              <p className="text-xs text-ink-soft mb-4 leading-relaxed line-clamp-2 italic">
-                "{post.answer}"
+            {post.body && (
+              <p className="text-xs text-ink-soft mb-3 leading-relaxed line-clamp-2">
+                {post.body}
               </p>
             )}
 
+            {/* Confidence badge */}
+            {(() => {
+              const conf = getConfidence(post);
+              return (
+                <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-semibold ${conf.color} mb-3`}>
+                  {conf.label}
+                </span>
+              );
+            })()}
+
             {/* Stats */}
-            <div className="flex items-center justify-between pt-3 border-t border-border/50">
+            <div className="flex items-center justify-between pt-3 border-t border-border/50 mt-auto">
               <div className="flex items-center gap-3 text-xs text-ink-soft">
                 <span className="flex items-center gap-1">
                   <ThumbUpIcon /> {post.upvotes?.length ?? 0}
@@ -184,11 +200,12 @@ export default function TopSolved() {
                   <CommentIcon /> {post.comments?.length ?? 0}
                 </span>
               </div>
-              {post.author?.name && (
-                <span className="text-xs text-ink-faint truncate max-w-[80px]">
-                  {post.author.name}
-                </span>
-              )}
+              {/* Bookmark icon */}
+              <button className="text-ink-faint hover:text-ink transition-colors" aria-label="Bookmark">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+                </svg>
+              </button>
             </div>
           </article>
         ))}

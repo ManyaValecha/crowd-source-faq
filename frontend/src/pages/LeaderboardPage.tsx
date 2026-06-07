@@ -20,31 +20,41 @@ interface LeaderboardEntry {
   periodPoints?: number;
 }
 
-type Period = 'weekly' | 'monthly' | 'all';
+type Period = 'monthly' | 'quarterly' | 'all';
 
 const TIER_COLORS: Record<string, string> = {
-  newcomer:       'bg-gray-100 text-gray-600',
-  contributor:   'bg-amber-100 text-amber-700',
-  helper:        'bg-slate-100 text-slate-600',
-  expert:        'bg-yellow-100 text-yellow-700',
-  champion:      'bg-indigo-100 text-indigo-700',
-  knowledge_master: 'bg-violet-100 text-violet-700',
+  newcomer:       'bg-card border border-border text-ink-soft',
+  contributor:   'bg-warning-light text-warning border border-warning/20',
+  helper:        'bg-card border border-border text-ink-soft',
+  expert:        'bg-warning-light text-warning border border-warning/20',
+  champion:      'bg-accent-light text-accent border border-accent/20',
+  knowledge_master: 'bg-accent-light text-accent border border-accent/20',
 };
 
-const TIER_ICONS: Record<string, string> = {
-  newcomer:       '🌱',
-  contributor:   '🥉',
-  helper:        '🥈',
-  expert:        '🥇',
-  champion:      '💎',
-  knowledge_master: '👑',
-};
+// Trust score bar segments renderer
+function TrustBar({ score }: { score: number }) {
+  const segments = 4;
+  const filled = Math.round((score / 100) * segments);
+  return (
+    <div className="flex items-center gap-0.5">
+      {Array.from({ length: segments }).map((_, i) => (
+        <div
+          key={i}
+          className={`w-2 h-4 rounded-sm ${
+            i < filled ? 'bg-success' : 'bg-border'
+          }`}
+        />
+      ))}
+    </div>
+  );
+}
 
-const RANK_STYLES: Record<number, string> = {
-  1: 'from-yellow-400 to-amber-500 text-accent-text',
-  2: 'from-slate-300 to-slate-400 text-accent-text',
-  3: 'from-orange-400 to-orange-500 text-accent-text',
-};
+// Rank movement arrow
+function RankArrow({ rank }: { rank: number }) {
+  if (rank === 1) return <span className="text-warning">&#x25B2;</span>;
+  if (rank <= 3) return <span className="text-accent">&#x2726;</span>;
+  return <span className="text-ink-faint">&#x203A;</span>;
+}
 
 export default function LeaderboardPage() {
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
@@ -89,15 +99,20 @@ export default function LeaderboardPage() {
         {/* Header + period tabs */}
         <div className="mb-6 sm:mb-8 text-center">
           <h1 className="text-2xl sm:text-3xl font-serif text-ink tracking-tight">Community Leaderboard</h1>
-          <p className="text-sm text-ink-soft mt-1">Top contributors in the Yaksha community</p>
+          <p className="text-sm text-ink-soft mt-1.5">Top contributors in the Yaksha community</p>
           {lastUpdated && (
-            <p className="text-[10px] text-ink-faint mt-1 flex items-center justify-center gap-1.5">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span>Live · updated {Math.max(0, Math.round((Date.now() - lastUpdated.getTime()) / 1000))}s ago · refreshes every 30s</span>
+            <p className="text-[10px] text-warning mt-1 flex items-center justify-center gap-1.5">
+              <span>Last updated: {(() => {
+                const diff = Math.round((Date.now() - lastUpdated.getTime()) / 1000);
+                if (diff < 60) return `${diff}s ago`;
+                const mins = Math.round(diff / 60);
+                if (mins < 60) return `${mins}m ago`;
+                return `${Math.round(mins / 60)}h ago`;
+              })()} &middot; Refreshes every 24h</span>
             </p>
           )}
           <div className="flex justify-center gap-1 mt-3">
-            {(['weekly', 'monthly', 'all'] as Period[]).map(p => (
+            {(['monthly', 'quarterly', 'all'] as Period[]).map(p => (
               <button
                 key={p}
                 onClick={() => setPeriod(p)}
@@ -121,35 +136,42 @@ export default function LeaderboardPage() {
                 return (
                   <div
                     key={e.userId}
-                    className={`relative rounded-2xl border p-4 sm:p-5 text-center bg-card shadow-subtle transition-all ${
-                      isFirst ? 'border-yellow-400/60 ring-2 ring-yellow-200/50 sm:scale-105 pb-6 sm:pb-7' : 'border-border'
+                    className={`relative rounded-2xl border-2 p-4 sm:p-5 text-center bg-card shadow-subtle transition-all ${
+                      isFirst ? 'border-yellow-500/70 border-dashed sm:scale-105 pb-6 sm:pb-7' : 'border-border'
                     }`}
                   >
-                    <div className={`absolute -top-3 left-1/2 -translate-x-1/2 px-2.5 py-0.5 rounded-full text-[10px] font-bold shadow-sm ${
-                      isFirst ? 'bg-yellow-400 text-yellow-900' : e.rank === 2 ? 'bg-slate-300 text-slate-800' : 'bg-orange-400 text-orange-900'
+                    <div className={`absolute -top-3 left-1/2 -translate-x-1/2 w-7 h-7 rounded-full text-xs font-bold shadow-sm flex items-center justify-center ${
+                      isFirst ? 'bg-yellow-500 text-yellow-950' : e.rank === 2 ? 'bg-slate-400 text-slate-950' : 'bg-orange-500 text-orange-950'
                     }`}>
-                      {isFirst ? '🥇 #1' : e.rank === 2 ? '🥈 #2' : '🥉 #3'}
+                      {e.rank}
                     </div>
                     <div className="flex justify-center mt-2 mb-2">
                       <Avatar name={e.name} size={isFirst ? 'lg' : 'md'} />
                     </div>
                     <p className="text-sm font-semibold text-ink truncate">{e.name}</p>
                     <div className="flex justify-center gap-1 mt-1 flex-wrap">
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${TIER_COLORS[e.tier] || 'bg-mist text-ink-soft'}`}>
-                        {TIER_ICONS[e.tier] ?? ''} {e.tier}
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${TIER_COLORS[e.tier] || 'bg-card border border-border text-ink-soft'}`}>
+                        {e.tier}
                       </span>
                     </div>
-                    <p className="text-xl sm:text-2xl font-bold text-ink mt-2">{e.points.toLocaleString()}</p>
-                    <p className="text-[10px] text-ink-faint -mt-0.5">points</p>
+                    <p className={`text-xl sm:text-2xl font-bold mt-2 ${isFirst ? 'text-warning' : 'text-ink'}`}>{e.points.toLocaleString()}</p>
+                    <p className={`text-[10px] -mt-0.5 ${isFirst ? 'text-warning' : 'text-ink-faint'}`}>points</p>
                     <div className="flex justify-around mt-2 pt-2 border-t border-border/40 text-[10px] text-ink-soft">
-                      <div className="flex flex-col">
-                        <span className="font-bold text-ink">{e.acceptedAnswers}</span>
-                        <span className="text-[9px] text-ink-faint">answers</span>
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="font-bold text-ink">{e.faqContributions}</span>
-                        <span className="text-[9px] text-ink-faint">FAQs</span>
-                      </div>
+                      <button className="flex items-center gap-1 text-ink-faint hover:text-accent transition-colors">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                          <polyline points="22 4 12 14.01 9 11.01"/>
+                        </svg>
+                        answers
+                      </button>
+                      <button className="flex items-center gap-1 text-ink-faint hover:text-accent transition-colors">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="10"/>
+                          <line x1="12" y1="8" x2="12" y2="12"/>
+                          <line x1="12" y1="16" x2="12.01" y2="16"/>
+                        </svg>
+                        FAQs
+                      </button>
                     </div>
                   </div>
                 );
@@ -181,15 +203,22 @@ export default function LeaderboardPage() {
                 <tbody>
                   {entries.map((e, i) => (
                     <tr key={e.userId} className="border-b border-border/40 last:border-0 hover:bg-mist/50 transition-colors">
-                      <td className="px-4 py-3 text-sm text-ink-faint">
-                        {e.rank <= 3 ? (
-                          <span className="text-sm">{e.rank === 1 ? '🥇' : e.rank === 2 ? '🥈' : '🥉'}</span>
-                        ) : (
-                          <span className="text-sm text-ink-faint">{e.rank}</span>
-                        )}
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                          {e.rank <= 3 ? (
+                            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                              e.rank === 1 ? 'bg-yellow-500 text-yellow-950' : e.rank === 2 ? 'bg-slate-400 text-slate-950' : 'bg-orange-500 text-orange-950'
+                            }`}>
+                              {e.rank}
+                            </span>
+                          ) : (
+                            <span className="text-sm text-ink-faint w-6 text-center">{e.rank}</span>
+                          )}
+                          <RankArrow rank={e.rank} />
+                        </div>
                       </td>
                       <td className="px-4 py-3">
-                        <p className="text-sm font-medium text-ink">{e.name}</p>
+                        <p className="text-sm font-medium text-accent">{e.name}</p>
                       </td>
                       <td className="px-4 py-3 text-right">
                         <span className="text-sm font-semibold text-ink">{e.points.toLocaleString()}</span>
@@ -201,19 +230,11 @@ export default function LeaderboardPage() {
                         <span className="text-sm text-ink">{e.faqContributions}</span>
                       </td>
                       <td className="px-4 py-3 text-right hidden md:table-cell">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <div className="w-10 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-indigo-500 rounded-full"
-                              style={{ width: `${e.trustScore}%` }}
-                            />
-                          </div>
-                          <span className="text-xs text-ink-faint w-6 text-right">{e.trustScore}</span>
-                        </div>
+                        <TrustBar score={e.trustScore} />
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${TIER_COLORS[e.tier] || 'bg-mist text-ink-soft'}`}>
-                          {TIER_ICONS[e.tier] ?? ''} {e.tier}
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${TIER_COLORS[e.tier] || 'bg-card border border-border text-ink-soft'}`}>
+                          {e.tier}
                         </span>
                       </td>
                     </tr>

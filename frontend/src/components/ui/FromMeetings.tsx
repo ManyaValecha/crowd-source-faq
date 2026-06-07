@@ -101,7 +101,7 @@ export default function FromMeetings() {
           </div>
           <h2 className="mt-1 font-serif text-xl sm:text-2xl text-ink leading-snug">
             {hasData
-              ? 'Questions interns asked — and we solved them'
+              ? (<>Questions interns asked... <span className="text-accent">and we solved in Zoom.</span></>)
               : 'Doubts answered in your team\'s Zoom sessions, turned into FAQs'}
           </h2>
           <p className="mt-1 text-xs sm:text-sm text-ink-soft max-w-xl">
@@ -111,10 +111,13 @@ export default function FromMeetings() {
           </p>
         </div>
         {anyZoomActivity && (
-          <div className="flex items-center gap-3 text-[11px] text-ink-soft bg-mist/60 border border-border/60 rounded-full px-3 py-1.5">
-            <span><b className="text-ink">{stats!.meetingsProcessed}</b> meetings</span>
-            <span className="text-ink-faint">·</span>
-            <span><b className="text-ink">{stats!.faqsPromoted}</b> FAQs added</span>
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-ink-soft bg-card border border-border rounded-lg px-2.5 py-1">
+              {stats!.meetingsProcessed} meetings
+            </span>
+            <span className="text-[11px] text-ink-soft bg-card border border-border rounded-lg px-2.5 py-1">
+              {stats!.faqsPromoted} FAQs added
+            </span>
           </div>
         )}
       </div>
@@ -128,14 +131,14 @@ export default function FromMeetings() {
               className="group cursor-pointer rounded-2xl border border-border bg-card hover:border-accent/30 hover:shadow-subtle transition-all p-4 flex flex-col"
             >
               <div className="flex items-center gap-1.5 mb-2.5">
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#2D8CFF]/10 text-[#2D8CFF] text-[10px] font-semibold uppercase tracking-wider">
-                  <VideoIcon /> From Meeting
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-success-light text-success text-[10px] font-semibold uppercase tracking-wider">
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><circle cx="4" cy="4" r="3"/></svg>
+                  FROM MEETING
                 </span>
-                {faq.category && (
-                  <span className="px-2 py-0.5 rounded-md bg-mist text-ink-faint text-[10px] font-semibold uppercase tracking-wider">
-                    {faq.category}
-                  </span>
-                )}
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#2D8CFF]/10 text-[#2D8CFF] text-[10px] font-semibold uppercase tracking-wider">
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><circle cx="4" cy="4" r="3"/></svg>
+                  ZOOM
+                </span>
               </div>
               <h3 className="text-sm font-semibold text-ink leading-snug line-clamp-2 group-hover:text-accent transition-colors">
                 {faq.question}

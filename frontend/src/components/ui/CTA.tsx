@@ -43,22 +43,9 @@ export default function CTA() {
 
         <button
           onClick={() => navigate('/community')}
-          className="search-ask-btn flex-shrink-0 w-full sm:w-auto cursor-pointer text-center"
+          className="btn-cta flex-shrink-0 w-full sm:w-auto cursor-pointer text-center"
         >
           Ask the Community
-          <svg
-            className="search-ask-btn-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <line x1="5" y1="12" x2="19" y2="12" />
-            <polyline points="12 5 19 12 12 19" />
-          </svg>
         </button>
       </div>
     </section>

@@ -54,12 +54,12 @@ export default function TrendingIssues() {
           </svg>
           <h3 className="font-serif text-lg text-ink">Trending Issues</h3>
           <svg width="22" height="12" viewBox="0 0 22 12" style={{ opacity: 0.15 }}>
-            <path d="M1 8 Q5 1 11 6 Q17 11 21 4" stroke="#1f1f1f" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
+            <path d="M1 8 Q5 1 11 6 Q17 11 21 4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
           </svg>
         </div>
         <button
           onClick={() => navigate('/community')}
-          className="text-sm text-ink-soft hover:text-accent transition-colors cursor-pointer flex items-center gap-1"
+          className="text-sm text-danger hover:text-danger/80 font-medium transition-colors cursor-pointer flex items-center gap-1"
         >
           View all
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -70,24 +70,42 @@ export default function TrendingIssues() {
       </div>
 
       <div className="space-y-0.5">
-        {issues.map((issue) => (
-          <div
-            key={issue._id}
-            onClick={() => navigate(`/community?post=${issue._id}`)}
-            className="flex items-center justify-between px-3 py-3 rounded-xl hover:bg-bg transition-colors cursor-pointer group"
-          >
-            <span className="text-sm text-ink group-hover:text-accent transition-colors line-clamp-1">
-              {issue.title}
-            </span>
-            <span className={`flex-shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium ${
-              issue.status === 'answered'
-                ? 'bg-success-light text-success'
-                : 'bg-warning-light text-warning'
-            }`}>
-              {issue.status === 'answered' ? 'Solved' : 'Open'}
-            </span>
-          </div>
-        ))}
+        {issues.map((issue) => {
+          // Pick a category icon based on tags/category
+          const iconColor = issue.status === 'answered' ? 'text-success' : 'text-ink-faint';
+          return (
+            <div
+              key={issue._id}
+              onClick={() => navigate(`/community?post=${issue._id}`)}
+              className="flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-bg transition-colors cursor-pointer group"
+            >
+              <span className={`flex-shrink-0 ${iconColor}`}>
+                {issue.status === 'answered' ? (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                  </svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                )}
+              </span>
+              <span className="text-sm text-ink group-hover:text-accent transition-colors line-clamp-1 flex-1 min-w-0">
+                {issue.title}
+              </span>
+              <span className={`flex-shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium ${
+                issue.status === 'answered'
+                  ? 'bg-success-light text-success'
+                  : 'bg-warning-light text-warning'
+              }`}>
+                {issue.status === 'answered' ? 'Solved' : 'Open'}
+              </span>
+            </div>
+          );
+        })}
       </div>
 
       <div className="mt-5 pt-4 border-t border-border/50 flex items-center justify-center gap-2 text-xs text-ink-soft">
