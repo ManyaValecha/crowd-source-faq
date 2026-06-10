@@ -1,5 +1,9 @@
-// 3-step submit wizard: pick issue type → follow checklist → submit.
-// Gated by feature flag.
+// 3-step submit wizard: pick category → follow checklist → describe
+// + dynamic context fields + submit. Gated by feature flag.
+//
+// The "issue type" string is no longer restricted to the original 6
+// hardcoded keys — admins can define new categories via the schema
+// editor. The user wizard just sends back whatever the user picked.
 
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -10,8 +14,13 @@ import {
   SUPPORT_ISSUE_OPTIONS,
 } from '../components/support/api';
 import { getIssueIcon } from '../components/support/icons';
+import { DynamicFieldInput } from '../components/support/DynamicFieldInput';
 import { useAuth } from '../hooks/useAuth';
-import type { SupportGuidance, SupportIssueType } from '../components/support/types';
+import type {
+  SupportGuidance,
+  SupportContextFieldDefinition,
+  SupportContextFieldValue,
+} from '../components/support/types';
 import Spinner from '../components/ui/Spinner';
 import { friendlyError } from '../utils/api';
 
@@ -21,22 +30,26 @@ function NewRequestInner(): React.ReactElement {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [step, setStep] = useState<0 | 1 | 2>(0);
-  const [issueType, setIssueType] = useState<SupportIssueType | null>(null);
+  const [issueType, setIssueType] = useState<string | null>(null);
   const [guidance, setGuidance] = useState<SupportGuidance | null>(null);
   const [guidanceLoading, setGuidanceLoading] = useState(false);
   const [attemptedSteps, setAttemptedSteps] = useState<string[]>([]);
   const [details, setDetails] = useState('');
+  const [contextValues, setContextValues] = useState<Record<string, string | number | boolean | null>>({});
+  const [erroredFields, setErroredFields] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Fetch checklist when user picks a type
+  // Fetch checklist + custom fields when user picks a type
   useEffect(() => {
     if (!issueType) return;
     let cancelled = false;
     setGuidanceLoading(true);
+    setContextValues({}); // reset context values when category changes
+    setErroredFields(new Set());
     fetchTroubleshoot(issueType)
       .then((g) => { if (!cancelled) setGuidance(g); })
-      .catch(() => { if (!cancelled) setGuidance({ issueType, label: '', steps: [] }); })
+      .catch(() => { if (!cancelled) setGuidance({ issueType, label: '', shortLabel: '', steps: [], fields: [] }); })
       .finally(() => { if (!cancelled) setGuidanceLoading(false); });
     return () => { cancelled = true; };
   }, [issueType]);
@@ -47,8 +60,58 @@ function NewRequestInner(): React.ReactElement {
     );
   }
 
+  function setContextFieldValue(key: string, value: string | number | boolean | null): void {
+    setContextValues((prev) => ({ ...prev, [key]: value }));
+    if (erroredFields.has(key)) {
+      setErroredFields((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  }
+
+  function buildContextFields(): SupportContextFieldValue[] {
+    const out: SupportContextFieldValue[] = [];
+    for (const field of guidance?.fields ?? []) {
+      const value = contextValues[field.key] ?? null;
+      const isEmpty = value === null || value === '';
+      if (isEmpty) continue;
+      out.push({ key: field.key, label: field.label, value });
+    }
+    return out;
+  }
+
+  function validateBeforeSubmit(): boolean {
+    const fields = guidance?.fields ?? [];
+    const requiredMissing: SupportContextFieldDefinition[] = [];
+    for (const field of fields) {
+      if (!field.required) continue;
+      const v = contextValues[field.key];
+      if (v === null || v === undefined || v === '') {
+        requiredMissing.push(field);
+      }
+    }
+    if (requiredMissing.length > 0) {
+      setErroredFields(new Set(requiredMissing.map((f) => f.key)));
+      setSubmitError(
+        `Please fill in the required field${requiredMissing.length > 1 ? 's' : ''}: ${requiredMissing.map((f) => f.label).join(', ')}.`,
+      );
+      return false;
+    }
+    return true;
+  }
+
   async function handleSubmit(): Promise<void> {
     if (!issueType) return;
+    if (!validateBeforeSubmit()) {
+      // Scroll to the first errored field
+      setTimeout(() => {
+        const el = document.querySelector('[data-errored="true"]');
+        if (el && 'scrollIntoView' in el) (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 50);
+      return;
+    }
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -57,6 +120,7 @@ function NewRequestInner(): React.ReactElement {
         details: details.trim(),
         attemptedSteps,
         guidanceShownAt: new Date().toISOString(),
+        contextFields: buildContextFields(),
       });
       navigate(`/support/${req._id}`, { replace: true });
     } catch (err) {
@@ -97,7 +161,7 @@ function NewRequestInner(): React.ReactElement {
           })}
         </ol>
 
-        {/* Step 1: issue type */}
+        {/* Step 1: pick category */}
         {step === 0 && (
           <div className="space-y-3">
             <h2 className="text-sm font-semibold text-ink">What stopped you from attending?</h2>
@@ -194,7 +258,7 @@ function NewRequestInner(): React.ReactElement {
           </div>
         )}
 
-        {/* Step 3: describe + submit */}
+        {/* Step 3: describe + dynamic context fields + submit */}
         {step === 2 && issueType && (
           <div className="space-y-4">
             <h2 className="text-sm font-semibold text-ink">Describe what happened</h2>
@@ -209,6 +273,41 @@ function NewRequestInner(): React.ReactElement {
             <p className="text-[11px] text-ink-faint text-right tabular-nums">
               {details.length} / 4000
             </p>
+
+            {/* Dynamic context fields for this category */}
+            {guidanceLoading ? (
+              <div className="flex items-center gap-2 text-sm text-ink-soft pt-2">
+                <Spinner size="sm" /> Loading category details…
+              </div>
+            ) : (guidance?.fields ?? []).length > 0 ? (
+              <section className="pt-2 space-y-3">
+                <h3 className="text-sm font-semibold text-ink pt-2 border-t border-border">
+                  {guidance?.shortLabel ? `${guidance.shortLabel} details` : 'Category details'}
+                </h3>
+                <p className="text-[11px] text-ink-faint -mt-1">
+                  A few quick questions so the support team can resolve this on the first reply.
+                </p>
+                <div className="space-y-3">
+                  {guidance?.fields
+                    .slice()
+                    .sort((a, b) => a.displayOrder - b.displayOrder)
+                    .map((field) => (
+                      <div
+                        key={field.key}
+                        data-errored={erroredFields.has(field.key) ? 'true' : 'false'}
+                        data-field-key={field.key}
+                      >
+                        <DynamicFieldInput
+                          field={field}
+                          value={contextValues[field.key] ?? null}
+                          onChange={(v) => setContextFieldValue(field.key, v)}
+                          errored={erroredFields.has(field.key)}
+                        />
+                      </div>
+                    ))}
+                </div>
+              </section>
+            ) : null}
 
             {submitError && (
               <p className="text-sm text-danger bg-danger/10 border border-danger/30 rounded-xl px-3 py-2">

@@ -10,6 +10,14 @@ import {
   listGuidance,
   updateGuidance,
   getSupportAnalytics,
+  listCategories,
+  getCategory,
+  createCategory,
+  updateCategory,
+  deleteCategory,
+  addField,
+  updateField,
+  archiveField,
 } from '../controllers/supportController.js';
 import { createIdentityLimiter } from '../utils/rateLimit.js';
 
@@ -57,5 +65,17 @@ router.post('/requests/:id/follow-ups',     replyLimiter,   addSupportFollowUp);
 
 // Status update (gated by flag, admin only).
 router.patch('/requests/:id/status', authorize('admin', 'moderator'), updateSupportStatus);
+
+// Category CRUD (admin only — not gated by the feature flag, admins
+// should be able to inspect / edit categories even when the feature
+// is off for users).
+router.get('/categories',                          authorize('admin', 'moderator'), listCategories);
+router.get('/categories/:issueType',              authorize('admin', 'moderator'), getCategory);
+router.post('/categories',                         authorize('admin', 'moderator'), createCategory);
+router.patch('/categories/:issueType',             authorize('admin', 'moderator'), updateCategory);
+router.delete('/categories/:issueType',          authorize('admin', 'moderator'), deleteCategory);
+router.post('/categories/:issueType/fields',      authorize('admin', 'moderator'), addField);
+router.patch('/categories/:issueType/fields/:fieldKey', authorize('admin', 'moderator'), updateField);
+router.delete('/categories/:issueType/fields/:fieldKey', authorize('admin', 'moderator'), archiveField);
 
 export default router;

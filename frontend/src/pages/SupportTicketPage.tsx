@@ -74,7 +74,9 @@ function SupportTicketInner(): React.ReactElement {
   }
   if (!request) return <div />;
 
-  const issueByKey = new Map(SUPPORT_ISSUE_OPTIONS.map((o) => [o.key, o]));
+  const issueByKey = new Map<string, { key: string; label: string; shortLabel: string }>(
+    SUPPORT_ISSUE_OPTIONS.map((o) => [o.key, o]),
+  );
   const closed = request.status === 'Resolved' || request.status === 'Rejected';
   const canReply = !closed;
 

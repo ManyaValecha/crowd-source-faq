@@ -60,7 +60,11 @@ function SupportIndexInner(): React.ReactElement {
 
   const requests = data?.requests ?? [];
   const summary = data?.summary;
-  const issueByKey = new Map((data?.issueOptions ?? SUPPORT_ISSUE_OPTIONS).map((o) => [o.key, o]));
+  // Map keyed by string so it works for both the hardcoded categories
+  // and admin-defined ones (which the API may return as arbitrary strings).
+  const issueByKey = new Map<string, { key: string; label: string; shortLabel: string }>(
+    (data?.issueOptions ?? SUPPORT_ISSUE_OPTIONS).map((o) => [o.key, o]),
+  );
 
   return (
     <div className="min-h-screen bg-bg">

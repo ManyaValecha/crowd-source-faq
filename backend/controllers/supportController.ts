@@ -23,6 +23,12 @@ import SupportRequest, {
   type ISupportFollowUp,
 } from '../models/SupportRequest.js';
 import AttendanceGuidance from '../models/AttendanceGuidance.js';
+import SupportCategory, {
+  SUPPORT_FIELD_TYPES,
+  SUPPORT_ICON_KEYS,
+  type IContextField,
+  type SupportFieldType,
+} from '../models/SupportCategory.js';
 import Notification from '../models/Notification.js';
 import AdminLog from '../models/AdminLog.js';
 import { logger } from '../utils/logger.js';
@@ -47,6 +53,60 @@ function getAuthedUserRole(req: Request): 'user' | 'moderator' | 'admin' | 'expe
 
 function escapeRegex(value: string): string {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ─── Context field helpers ───────────────────────────────────────────────────
+
+/** Coerce a raw user-submitted value to the canonical type for the
+ *  field. Returns `{ ok: true, value }` on success; `{ ok: false, error }`
+ *  on a type-mismatch. The empty string is treated as null (lets users
+ *  leave optional fields blank). */
+function coerceContextFieldValue(
+  field: IContextField,
+  raw: unknown,
+): { ok: true; value: string | number | boolean | null } | { ok: false; error: string } {
+  // Empty / undefined → null
+  if (raw === undefined || raw === null || raw === '') {
+    return { ok: true, value: null };
+  }
+
+  switch (field.type) {
+    case 'text':
+    case 'textarea': {
+      if (typeof raw !== 'string') return { ok: false, error: 'must be text' };
+      const trimmed = raw.trim();
+      if (field.type === 'text' && trimmed.length > 200) return { ok: false, error: 'too long (max 200)' };
+      if (field.type === 'textarea' && trimmed.length > 2000) return { ok: false, error: 'too long (max 2000)' };
+      return { ok: true, value: trimmed };
+    }
+    case 'number': {
+      const n = typeof raw === 'number' ? raw : Number(raw);
+      if (!Number.isFinite(n)) return { ok: false, error: 'must be a number' };
+      return { ok: true, value: n };
+    }
+    case 'date': {
+      if (typeof raw !== 'string') return { ok: false, error: 'must be a date string' };
+      const d = new Date(raw);
+      if (isNaN(d.getTime())) return { ok: false, error: 'invalid date' };
+      return { ok: true, value: d.toISOString().slice(0, 10) };
+    }
+    case 'boolean': {
+      if (typeof raw === 'boolean') return { ok: true, value: raw };
+      if (raw === 'true') return { ok: true, value: true };
+      if (raw === 'false') return { ok: true, value: false };
+      return { ok: false, error: 'must be true or false' };
+    }
+    case 'dropdown': {
+      if (typeof raw !== 'string') return { ok: false, error: 'must be a string' };
+      const valid = field.options.some((o) => o.value === raw);
+      if (!valid) return { ok: false, error: 'value not in dropdown options' };
+      return { ok: true, value: raw };
+    }
+  }
+}
+
+function isEmptyContextValue(v: string | number | boolean | null): boolean {
+  return v === null || v === '';
 }
 
 /** Strip admin-only fields when sending a ticket to a non-admin. */
@@ -135,26 +195,47 @@ async function requireFeatureOn(_req: Request, res: Response): Promise<boolean> 
 
 /**
  * GET /api/support/troubleshoot/:issueType
- * Returns the checklist for an issue type. Auto-creates from in-code
- * defaults if no row exists in AttendanceGuidance. Gated by flag.
+ * Returns the checklist + custom context-field schema for an issue
+ * type. Reads from SupportCategory (the new admin-editable model).
+ * Falls back to the hardcoded ISSUE_CONFIGS defaults if no row
+ * exists yet (covers the case where the seed script hasn't been run
+ * — e.g. fresh dev environment). Gated by flag.
  */
 export async function getTroubleshootSteps(req: Request, res: Response): Promise<void> {
   if (!(await requireFeatureOn(req, res))) return;
   try {
     const issueType = String(req.params.issueType || '').trim() as SupportIssueType;
     const config = getIssueConfig(issueType);
-    let guidance = await AttendanceGuidance.findOne({ issueType });
-    if (!guidance) {
-      guidance = await AttendanceGuidance.create({
-        issueType,
-        steps: config.steps,
-        updatedBy: null,
-      });
+
+    // Prefer the admin-editable SupportCategory
+    let cat = await SupportCategory.findOne({ issueType, isActive: true }).lean();
+    if (!cat) {
+      // Fall back to the in-code defaults + an empty field list
+      cat = await SupportCategory.findOneAndUpdate(
+        { issueType },
+        {
+          $setOnInsert: {
+            issueType,
+            label: config.label,
+            shortLabel: config.shortLabel,
+            steps: config.steps,
+            fields: [],
+            isActive: true,
+          },
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      ).lean();
     }
+
     res.json({
       issueType,
-      label: config.label,
-      steps: guidance.steps,
+      label: cat?.label ?? config.label,
+      shortLabel: cat?.shortLabel ?? config.shortLabel,
+      steps: cat?.steps ?? config.steps,
+      // Only return non-archived fields — the user form doesn't render
+      // archived ones. The admin ticket view looks these up from the
+      // stored triples (the ticket knows its own label snapshot).
+      fields: (cat?.fields ?? []).filter((f) => !f.archived),
     });
   } catch (err) {
     logger.error(`[support] getTroubleshootSteps failed: ${(err as Error).message}`);
@@ -178,6 +259,7 @@ export async function createSupportRequest(req: Request, res: Response): Promise
     attemptedSteps?: string[];
     documents?: { name?: string; url?: string; type?: string }[];
     guidanceShownAt?: string;
+    contextFields?: Record<string, unknown>;
   };
 
   const rawIssueType = String(body.issueType || '').trim();
@@ -220,6 +302,30 @@ export async function createSupportRequest(req: Request, res: Response): Promise
     return;
   }
 
+  // ── Validate + coerce contextFields against the live category schema ─
+  // Look up the active category so we honour admin-edits without a
+  // deploy. Defaults to the hardcoded fallback if no row exists yet.
+  const activeCategory = await SupportCategory.findOne({ issueType, isActive: true }).lean();
+  const schemaFields: IContextField[] = (activeCategory?.fields ?? []).filter((f) => !f.archived);
+  const contextFieldsInput = (body.contextFields ?? {}) as Record<string, unknown>;
+
+  const contextFields: { key: string; label: string; value: string | number | boolean | null }[] = [];
+  for (const field of schemaFields) {
+    const raw = contextFieldsInput[field.key];
+    const coerced = coerceContextFieldValue(field, raw);
+    if (!coerced.ok) {
+      res.status(400).json({ message: `Field "${field.label}": ${coerced.error}` });
+      return;
+    }
+    if (field.required && isEmptyContextValue(coerced.value)) {
+      res.status(400).json({ message: `Field "${field.label}" is required.` });
+      return;
+    }
+    if (!isEmptyContextValue(coerced.value)) {
+      contextFields.push({ key: field.key, label: field.label, value: coerced.value });
+    }
+  }
+
   try {
     // Fetch the requester's user record for denormalised name/email
     const { default: User } = await import('../models/User.js');
@@ -234,7 +340,7 @@ export async function createSupportRequest(req: Request, res: Response): Promise
       userName: requester.name,
       userEmail: requester.email,
       issueType,
-      issueLabel: config.label,
+      issueLabel: activeCategory?.label ?? config.label,
       title,
       details,
       attemptedSteps,
@@ -247,6 +353,7 @@ export async function createSupportRequest(req: Request, res: Response): Promise
         timestamp: new Date(),
       }],
       guidanceShownAt,
+      contextFields,
     });
 
     // Attach the documents (if any) as the first follow-up, so the
@@ -832,8 +939,293 @@ export async function getSupportAnalytics(_req: Request, res: Response): Promise
   }
 }
 
-// Re-export invalidate so callers (e.g. /api/support mount in server.ts)
-// can clear caches if needed. Currently unused; kept for symmetry.
-export { invalidateFeatureFlagCache };
-// Avoid "unused" warning for the cached import
-void invalidatePublicCaches;
+// ─── Admin: category CRUD (NOT gated by feature flag) ─────────────────────
+
+/** GET /api/support/categories — list all categories (active first). */
+export async function listCategories(_req: Request, res: Response): Promise<void> {
+  try {
+    const cats = await SupportCategory.find({}).sort({ displayOrder: 1, createdAt: 1 }).lean();
+    res.json({ categories: cats });
+  } catch (err) {
+    logger.error(`[support] listCategories failed: ${(err as Error).message}`);
+    res.status(500).json({ message: 'Failed to load categories.' });
+  }
+}
+
+/** GET /api/support/categories/:issueType — get one (with its full schema). */
+export async function getCategory(req: Request, res: Response): Promise<void> {
+  const rawKey = req.params.issueType;
+  const issueType = Array.isArray(rawKey) ? rawKey[0] : rawKey;
+  if (!issueType) { res.status(400).json({ message: 'Invalid issueType.' }); return; }
+  try {
+    const cat = await SupportCategory.findOne({ issueType }).lean();
+    if (!cat) { res.status(404).json({ message: 'Category not found.' }); return; }
+    res.json({ category: cat });
+  } catch (err) {
+    logger.error(`[support] getCategory failed: ${(err as Error).message}`);
+    res.status(500).json({ message: 'Failed to load category.' });
+  }
+}
+
+/** POST /api/support/categories — create a new category. */
+export async function createCategory(req: Request, res: Response): Promise<void> {
+  const userId = getAuthedUserId(req);
+  if (!userId) { res.status(401).json({ message: 'Authentication required.' }); return; }
+
+  const body = (req.body ?? {}) as {
+    issueType?: string;
+    label?: string;
+    shortLabel?: string;
+    description?: string;
+    iconKey?: string;
+    steps?: string[];
+    isActive?: boolean;
+  };
+  const issueType = String(body.issueType || '').trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(issueType)) {
+    res.status(400).json({ message: 'issueType must be kebab-case (a-z, 0-9, dash).' });
+    return;
+  }
+  const label = String(body.label || '').trim();
+  const shortLabel = String(body.shortLabel || '').trim();
+  if (!label || !shortLabel) {
+    res.status(400).json({ message: 'label and shortLabel are required.' });
+    return;
+  }
+  const steps = Array.isArray(body.steps) ? body.steps.map((s) => String(s).trim()).filter(Boolean).slice(0, 20) : [];
+
+  try {
+    const exists = await SupportCategory.findOne({ issueType }).lean();
+    if (exists) {
+      res.status(409).json({ message: 'A category with this issueType already exists.' });
+      return;
+    }
+    const max = await SupportCategory.findOne({}).sort({ displayOrder: -1 }).select('displayOrder').lean();
+    const displayOrder = (max?.displayOrder ?? -1) + 1;
+    const cat = await SupportCategory.create({
+      issueType,
+      label,
+      shortLabel,
+      description: String(body.description || ''),
+      iconKey: (SUPPORT_ICON_KEYS as readonly string[]).includes(String(body.iconKey)) ? body.iconKey as any : 'generic',
+      steps,
+      fields: [],
+      isActive: body.isActive !== false,
+      displayOrder,
+      createdBy: userId,
+    });
+    res.status(201).json({ category: cat.toObject() });
+  } catch (err) {
+    const e = err as Error & { code?: number };
+    if (e.code === 11000) {
+      res.status(409).json({ message: 'A category with this issueType already exists.' });
+      return;
+    }
+    logger.error(`[support] createCategory failed: ${e.message}`);
+    res.status(500).json({ message: 'Failed to create category.' });
+  }
+}
+
+/** PATCH /api/support/categories/:issueType — update label / shortLabel /
+ *  description / steps / iconKey / isActive / displayOrder. (Fields are
+ *  managed via the field-specific endpoints below.) */
+export async function updateCategory(req: Request, res: Response): Promise<void> {
+  const rawKey = req.params.issueType;
+  const issueType = Array.isArray(rawKey) ? rawKey[0] : rawKey;
+  if (!issueType) { res.status(400).json({ message: 'Invalid issueType.' }); return; }
+
+  const body = (req.body ?? {}) as {
+    label?: string;
+    shortLabel?: string;
+    description?: string;
+    iconKey?: string;
+    steps?: string[];
+    isActive?: boolean;
+    displayOrder?: number;
+  };
+  const update: Record<string, unknown> = {};
+  if (typeof body.label === 'string') update.label = body.label.trim();
+  if (typeof body.shortLabel === 'string') update.shortLabel = body.shortLabel.trim();
+  if (typeof body.description === 'string') update.description = body.description;
+  if (typeof body.iconKey === 'string' && (SUPPORT_ICON_KEYS as readonly string[]).includes(body.iconKey)) {
+    update.iconKey = body.iconKey;
+  }
+  if (Array.isArray(body.steps)) {
+    update.steps = body.steps.map((s) => String(s).trim()).filter(Boolean).slice(0, 20);
+  }
+  if (typeof body.isActive === 'boolean') update.isActive = body.isActive;
+  if (typeof body.displayOrder === 'number') update.displayOrder = body.displayOrder;
+  if (Object.keys(update).length === 0) {
+    res.status(400).json({ message: 'No updatable fields provided.' });
+    return;
+  }
+
+  try {
+    const cat = await SupportCategory.findOneAndUpdate(
+      { issueType },
+      { $set: update },
+      { new: true },
+    ).lean();
+    if (!cat) { res.status(404).json({ message: 'Category not found.' }); return; }
+    res.json({ category: cat });
+  } catch (err) {
+    logger.error(`[support] updateCategory failed: ${(err as Error).message}`);
+    res.status(500).json({ message: 'Failed to update category.' });
+  }
+}
+
+/** DELETE /api/support/categories/:issueType — hard delete.
+ *  Tickets in this category keep their stored `contextFields` triples
+ *  but lose the schema reference. Use carefully. */
+export async function deleteCategory(req: Request, res: Response): Promise<void> {
+  const rawKey = req.params.issueType;
+  const issueType = Array.isArray(rawKey) ? rawKey[0] : rawKey;
+  if (!issueType) { res.status(400).json({ message: 'Invalid issueType.' }); return; }
+  try {
+    const cat = await SupportCategory.findOneAndDelete({ issueType }).lean();
+    if (!cat) { res.status(404).json({ message: 'Category not found.' }); return; }
+    res.json({ deleted: true });
+  } catch (err) {
+    logger.error(`[support] deleteCategory failed: ${(err as Error).message}`);
+    res.status(500).json({ message: 'Failed to delete category.' });
+  }
+}
+
+// ─── Admin: per-field CRUD (add / edit / archive / reorder) ──────────────
+
+/** POST /api/support/categories/:issueType/fields — add a new field. */
+export async function addField(req: Request, res: Response): Promise<void> {
+  const rawKey = req.params.issueType;
+  const issueType = Array.isArray(rawKey) ? rawKey[0] : rawKey;
+  if (!issueType) { res.status(400).json({ message: 'Invalid issueType.' }); return; }
+
+  const body = (req.body ?? {}) as {
+    key?: string;
+    label?: string;
+    type?: string;
+    required?: boolean;
+    placeholder?: string;
+    helpText?: string;
+    options?: { value?: string; label?: string }[];
+  };
+
+  if (!body.label || !body.type || !SUPPORT_FIELD_TYPES.includes(body.type as any)) {
+    res.status(400).json({ message: 'label and a valid type are required.' });
+    return;
+  }
+  if (body.type === 'dropdown') {
+    if (!Array.isArray(body.options) || body.options.length === 0 ||
+        !body.options.every((o) => o && o.value && o.label)) {
+      res.status(400).json({ message: 'dropdown fields need at least one option with value and label.' });
+      return;
+    }
+  }
+  const autoKey = String(body.label || '')
+    .toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  const key = String(body.key || autoKey).toLowerCase().trim();
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(key)) {
+    res.status(400).json({ message: 'field key must be kebab-case (a-z, 0-9, dash).' });
+    return;
+  }
+
+  try {
+    const cat = await SupportCategory.findOne({ issueType }).lean();
+    if (!cat) { res.status(404).json({ message: 'Category not found.' }); return; }
+    if (cat.fields.some((f) => f.key === key)) {
+      res.status(409).json({ message: `A field with key "${key}" already exists on this category.` });
+      return;
+    }
+    const displayOrder = cat.fields.length;
+    const newField: IContextField = {
+      key,
+      label: String(body.label).trim(),
+      type: body.type as any,
+      required: Boolean(body.required),
+      placeholder: String(body.placeholder || ''),
+      helpText: String(body.helpText || ''),
+      options: (body.options ?? []).map((o) => ({ value: String(o.value), label: String(o.label) })),
+      displayOrder,
+      archived: false,
+      archivedAt: null,
+    };
+    const updated = await SupportCategory.findOneAndUpdate(
+      { issueType },
+      { $push: { fields: newField } },
+      { new: true },
+    ).lean();
+    res.status(201).json({ category: updated });
+  } catch (err) {
+    logger.error(`[support] addField failed: ${(err as Error).message}`);
+    res.status(500).json({ message: 'Failed to add field.' });
+  }
+}
+
+/** PATCH /api/support/categories/:issueType/fields/:fieldKey — update. */
+export async function updateField(req: Request, res: Response): Promise<void> {
+  const rawKey = req.params.issueType;
+  const issueType = Array.isArray(rawKey) ? rawKey[0] : rawKey;
+  const rawField = req.params.fieldKey;
+  const fieldKey = Array.isArray(rawField) ? rawField[0] : rawField;
+  if (!issueType || !fieldKey) { res.status(400).json({ message: 'Invalid params.' }); return; }
+
+  const body = (req.body ?? {}) as {
+    label?: string;
+    required?: boolean;
+    placeholder?: string;
+    helpText?: string;
+    options?: { value?: string; label?: string }[];
+    displayOrder?: number;
+  };
+
+  const update: Record<string, unknown> = {};
+  if (typeof body.label === 'string') update['fields.$.label'] = body.label.trim();
+  if (typeof body.required === 'boolean') update['fields.$.required'] = body.required;
+  if (typeof body.placeholder === 'string') update['fields.$.placeholder'] = body.placeholder;
+  if (typeof body.helpText === 'string') update['fields.$.helpText'] = body.helpText;
+  if (Array.isArray(body.options)) {
+    update['fields.$.options'] = body.options.map((o) => ({ value: String(o.value), label: String(o.label) }));
+  }
+  if (typeof body.displayOrder === 'number') update['fields.$.displayOrder'] = body.displayOrder;
+  if (Object.keys(update).length === 0) {
+    res.status(400).json({ message: 'No updatable fields provided.' });
+    return;
+  }
+
+  try {
+    const cat = await SupportCategory.findOneAndUpdate(
+      { issueType, 'fields.key': fieldKey },
+      { $set: update },
+      { new: true },
+    ).lean();
+    if (!cat) { res.status(404).json({ message: 'Field not found.' }); return; }
+    res.json({ category: cat });
+  } catch (err) {
+    logger.error(`[support] updateField failed: ${(err as Error).message}`);
+    res.status(500).json({ message: 'Failed to update field.' });
+  }
+}
+
+/** DELETE /api/support/categories/:issueType/fields/:fieldKey — soft delete
+ *  (archives the field; historical ticket values remain readable). */
+export async function archiveField(req: Request, res: Response): Promise<void> {
+  const rawKey = req.params.issueType;
+  const issueType = Array.isArray(rawKey) ? rawKey[0] : rawKey;
+  const rawField = req.params.fieldKey;
+  const fieldKey = Array.isArray(rawField) ? rawField[0] : rawField;
+  if (!issueType || !fieldKey) { res.status(400).json({ message: 'Invalid params.' }); return; }
+  try {
+    const cat = await SupportCategory.findOneAndUpdate(
+      { issueType, 'fields.key': fieldKey },
+      { $set: { 'fields.$.archived': true, 'fields.$.archivedAt': new Date() } },
+      { new: true },
+    ).lean();
+    if (!cat) { res.status(404).json({ message: 'Field not found.' }); return; }
+    res.json({ category: cat });
+  } catch (err) {
+    logger.error(`[support] archiveField failed: ${(err as Error).message}`);
+    res.status(500).json({ message: 'Failed to archive field.' });
+  }
+}

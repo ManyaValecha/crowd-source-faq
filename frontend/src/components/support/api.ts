@@ -10,6 +10,8 @@ import type {
   SupportRequest,
   SupportIssueType,
   SupportStatus,
+  SupportContextFieldDefinition,
+  SupportCategory,
 } from './types';
 
 export const SUPPORT_ISSUE_OPTIONS: { key: SupportIssueType; label: string; shortLabel: string; icon: 'wifi' | 'camera' | 'mic' | 'device' | 'power' | 'other' }[] = [
@@ -49,12 +51,13 @@ export async function getSupportRequest(id: string): Promise<SupportRequest> {
 }
 
 export interface SubmitPayload {
-  issueType: SupportIssueType;
+  issueType: SupportIssueType | string;
   title?: string;
   details: string;
   attemptedSteps: string[];
   documents?: { name: string; url: string; type: string }[];
   guidanceShownAt?: string;
+  contextFields?: Array<{ key: string; label: string; value: string | number | boolean | null }>;
 }
 
 export async function submitSupportRequest(payload: SubmitPayload): Promise<SupportRequest> {
@@ -99,7 +102,7 @@ export async function listGuidance(): Promise<SupportGuidance[]> {
   return res.data;
 }
 
-export async function updateGuidance(issueType: SupportIssueType, steps: string[]): Promise<SupportGuidance> {
+export async function updateGuidance(issueType: string, steps: string[]): Promise<SupportGuidance> {
   const res = await api.put<{ guidance: SupportGuidance }>(`/support/guidance/${issueType}`, { steps });
   return res.data.guidance;
 }
@@ -107,4 +110,68 @@ export async function updateGuidance(issueType: SupportIssueType, steps: string[
 export async function fetchSupportAnalytics(): Promise<SupportAnalytics> {
   const res = await api.get<SupportAnalytics>('/support/analytics');
   return res.data;
+}
+
+// ─── Category CRUD (admin) ────────────────────────────────────────────────
+
+export async function listCategories(): Promise<SupportCategory[]> {
+  const res = await api.get<{ categories: SupportCategory[] }>('/support/categories');
+  return res.data.categories ?? [];
+}
+
+export async function getCategory(issueType: string): Promise<SupportCategory> {
+  const res = await api.get<{ category: SupportCategory }>(`/support/categories/${issueType}`);
+  return res.data.category;
+}
+
+export interface CategoryPayload {
+  issueType: string;
+  label: string;
+  shortLabel: string;
+  description?: string;
+  iconKey?: string;
+  steps?: string[];
+  isActive?: boolean;
+}
+
+export async function createCategory(payload: CategoryPayload): Promise<SupportCategory> {
+  const res = await api.post<{ category: SupportCategory }>('/support/categories', payload);
+  return res.data.category;
+}
+
+export async function updateCategory(issueType: string, patch: Partial<CategoryPayload>): Promise<SupportCategory> {
+  const res = await api.patch<{ category: SupportCategory }>(`/support/categories/${issueType}`, patch);
+  return res.data.category;
+}
+
+export async function deleteCategory(issueType: string): Promise<void> {
+  await api.delete(`/support/categories/${issueType}`);
+}
+
+// ─── Per-field CRUD (admin) ───────────────────────────────────────────────
+
+export interface FieldPayload {
+  key?: string;
+  label: string;
+  type: SupportContextFieldDefinition['type'];
+  required?: boolean;
+  placeholder?: string;
+  helpText?: string;
+  options?: { value: string; label: string }[];
+  displayOrder?: number;
+}
+
+export async function addField(issueType: string, payload: FieldPayload): Promise<SupportCategory> {
+  const res = await api.post<{ category: SupportCategory }>(`/support/categories/${issueType}/fields`, payload);
+  return res.data.category;
+}
+
+export async function updateField(issueType: string, fieldKey: string, patch: Partial<FieldPayload>): Promise<SupportCategory> {
+  const res = await api.patch<{ category: SupportCategory }>(`/support/categories/${issueType}/fields/${fieldKey}`, patch);
+  return res.data.category;
+}
+
+export async function archiveField(issueType: string, fieldKey: string): Promise<SupportCategory> {
+  const res = await api.delete<{ category: SupportCategory }>(`/support/categories/${issueType}/fields/${fieldKey}`);
+  return res.data.category;
 }

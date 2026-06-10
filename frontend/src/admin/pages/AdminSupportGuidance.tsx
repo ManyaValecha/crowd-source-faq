@@ -15,7 +15,7 @@ const ISSUE_TYPES = SUPPORT_ISSUE_OPTIONS.map((o) => o.key);
 function GuidanceInner(): React.ReactElement {
   const [list, setList] = useState<SupportGuidance[] | null>(null);
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState<SupportIssueType | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);

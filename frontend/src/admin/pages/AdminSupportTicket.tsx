@@ -12,7 +12,8 @@ import {
   SUPPORT_ISSUE_OPTIONS,
 } from '../../components/support/api';
 import { getIssueIcon } from '../../components/support/icons';
-import type { SupportRequest, SupportStatus } from '../../components/support/types';
+import { ContextFieldsDisplay } from '../../components/support/ContextFieldsDisplay';
+import type { SupportRequest, SupportStatus, SupportCategory } from '../../components/support/types';
 import Spinner from '../../components/ui/Spinner';
 import { friendlyError } from '../../utils/api';
 
@@ -275,6 +276,9 @@ function AdminTicketInner(): React.ReactElement {
           </ul>
         </div>
       )}
+
+      {/* Provided context — the schema-driven fields the student filled in */}
+      <ContextFieldsDisplay values={request.contextFields ?? []} />
 
       {/* Thread */}
       <div className="admin-card-surface p-5">

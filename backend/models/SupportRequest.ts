@@ -149,6 +149,13 @@ export interface ISupportRequest extends Document {
   // Provenance — when the user last saw the troubleshooting checklist
   guidanceShownAt: Date | null;
 
+  // ── Schema-driven context fields (additive) ────────────────────────────
+  // List of {key, label, value} triples. The label is snapshotted at
+  // submit time so the admin view can render the *current* label even
+  // if the field's display label was renamed or the field was
+  // archived after the ticket was submitted.
+  contextFields: { key: string; label: string; value: string | number | boolean | null }[];
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -228,7 +235,23 @@ const supportRequestSchema = new MongooseSchema<ISupportRequest>(
     followUps:      { type: [followUpSubSchema], default: [] },
     statusHistory:  { type: [statusHistorySubSchema], default: [] },
 
+    // Provenance — when the user last saw the troubleshooting checklist
     guidanceShownAt: { type: Date, default: null },
+
+    // ── Schema-driven context fields (additive) ──────────────────────────
+    // Stored as a list of {key, label, value} triples so the admin view
+    // can render the *current* label even if the field was renamed or
+    // archived after this ticket was submitted. Key is the immutable
+    // schema identifier; value is the canonical type-coerced input.
+    contextFields: {
+      type: [{
+        _id: false,
+        key:   { type: String, required: true, trim: true, maxlength: 60 },
+        label: { type: String, required: true, trim: true, maxlength: 120 },
+        value: { type: MongooseSchema.Types.Mixed, default: null },
+      }],
+      default: [],
+    },
   },
   { timestamps: true }
 );

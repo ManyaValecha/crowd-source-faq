@@ -76,6 +76,9 @@ export function OtherIcon(props: React.SVGProps<SVGSVGElement>): React.ReactElem
 }
 
 export function getIssueIcon(key: string): React.ReactElement {
+  // The hardcoded map below matches the 6 default categories. Admin-
+  // defined categories (e.g. "stipend-issue") fall through to the
+  // generic icon. Adding a new default just means adding a case here.
   switch (key) {
     case 'internet':   return <WifiIcon />;
     case 'camera':     return <CameraIcon />;
