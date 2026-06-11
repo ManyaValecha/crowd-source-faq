@@ -1,9 +1,29 @@
 // Import Mongoose to interact with MongoDB
 import mongoose, { Connection } from 'mongoose';
-import { logger } from '../utils/http/logger.js';
+import { dbLog } from '../utils/http/logger.js';
 
 // Cache connection in serverless environment
 let cachedConnection: Connection | null = null;
+
+// v1.67 — Wire mongoose's connection event listeners so we get
+// DISCORD-pinging ALERTS on disconnect / reconnection, not just
+// console.error noise. `connected` and `disconnected` are
+// lifecycle events; `error` is for protocol-level failures.
+mongoose.connection.on('connected', () => {
+  dbLog.info('connection established', { host: mongoose.connection.host });
+});
+mongoose.connection.on('disconnected', () => {
+  dbLog.alert('disconnected', {
+    readyState: mongoose.connection.readyState,
+    host: mongoose.connection.host,
+  });
+});
+mongoose.connection.on('reconnected', () => {
+  dbLog.info('reconnected', { host: mongoose.connection.host });
+});
+mongoose.connection.on('error', (err: Error) => {
+  dbLog.alert('connection error', { message: err.message });
+});
 
 // Async function to handle the database connection
 const connectDB = async (): Promise<Connection> => {
@@ -12,6 +32,7 @@ const connectDB = async (): Promise<Connection> => {
   }
 
   if (!process.env.MONGODB_URI) {
+    dbLog.alert('MONGODB_URI missing at startup', { nodeEnv: process.env.NODE_ENV });
     throw new Error('MONGODB_URI environment variable is missing');
   }
 
@@ -21,12 +42,11 @@ const connectDB = async (): Promise<Connection> => {
       serverSelectionTimeoutMS: 5000,
     })).connection;
 
-    // Log a success message with the connected host name
-    logger.info(`MongoDB Connected: ${cachedConnection.host}`);
+    dbLog.info('connected at startup', { host: cachedConnection.host });
     return cachedConnection;
   } catch (error) {
     const err = error as Error;
-    logger.error(`MongoDB connection error: ${err.message}`);
+    dbLog.alert('connection failed at startup', { message: err.message });
     throw error;
   }
 };

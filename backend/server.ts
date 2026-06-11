@@ -29,7 +29,7 @@ import featureFlagRoutes from './routes/featureFlag.js';
 import { documentRouter, documentAdminRouter } from './routes/documents.js';
 import { adminRouter as appSettingsAdminRouter, publicRouter as appSettingsPublicRouter } from './routes/appSettings.js';
 import { ingestFrontendLog } from './utils/http/fileLogger.js';
-import { logger } from './utils/http/logger.js';
+import { logger, startupLog, shutdownLog, cronLog, queueLog } from './utils/http/logger.js';
 import { requestLogger } from './utils/http/requestLogger.js';
 import { startEscalationScheduler, stopEscalationScheduler } from './controllers/escalationController.js';
 import { runScheduledAutoAnswer, stopAutoAnswerScheduler } from './controllers/autoAnswerController.js';
@@ -329,13 +329,20 @@ function validateEnv(): void {
 if (process.env.NODE_ENV !== 'production') {
   validateEnv();
   app.listen(PORT, async () => {
-    logger.info(`Yaksha FAQ Portal backend running on port ${PORT}`);
+    // v1.67 — fire ALERT on startup (Discord ping). This is the
+    // "server is alive" signal so you know restarts happened.
+    startupLog.alert('backend listening', {
+      port: PORT,
+      env: process.env.NODE_ENV ?? 'development',
+      nodeVersion: process.version,
+    });
+    startupLog.info(`Yaksha FAQ Portal backend running on port ${PORT}`);
 
     // Ensure MongoDB is connected before starting any scheduled tasks
     try {
       await connectDB();
     } catch (e) {
-      logger.error(`Startup DB connect failed: ${(e as Error).message}`);
+      startupLog.error('startup DB connect failed', { error: (e as Error).message });
     }
 
     startEscalationScheduler();
@@ -425,7 +432,10 @@ if (process.env.NODE_ENV !== 'production') {
 
 // Graceful shutdown — flush pending work before exiting
 async function gracefulShutdown(signal: string): Promise<void> {
-  logger.info(`[shutdown] Received ${signal}, starting graceful shutdown`);
+  // v1.67 — ALERT-level shutdown log so the Discord channel sees
+  // every restart. The followup "shutdown complete" line is
+  // INFO (so it doesn't double-ping).
+  shutdownLog.alert('shutdown initiated', { signal });
   Sentry.close(2000).catch((err) => {
     logger.warn(`[shutdown] Sentry flush failed: ${(err as Error).message}`);
   }); // flush Sentry within 2s
@@ -442,7 +452,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Close MongoDB connection
   await mongoose.connection.close();
 
-  logger.info('[shutdown] Graceful shutdown complete');
+  shutdownLog.info('graceful shutdown complete');
 }
 
 process.on('SIGTERM', () => {
