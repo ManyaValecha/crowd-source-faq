@@ -98,6 +98,15 @@ export interface IUser extends Document {
   // or self-delete.
   lastGoldenTicketAt: Date | null;
   lastGoldenRejectionAt: Date | null;
+  // v1.65.1 — Golden Ticket rejection ban. Stamped on the user by
+  // the admin rejection flow (`supportFollowUpController.ts`); the
+  // createSupportRequest gate refuses any Golden submission while
+  // this is in the future, and the frontend shows a sticky "you are
+  // banned" banner with the remaining time. Separate from the
+  // cooldown because the user can see a clear distinction: cooldown
+  // = "wait a bit" (passive), ban = "you broke the rules" (active,
+  // publicly shown).
+  goldenBannedUntil: Date | null;
   // Methods
   comparePassword(candidatePassword: string): Promise<boolean>;
 }
@@ -193,10 +202,19 @@ const userSchema = new MongooseSchema<IUser>(
     // sp is independent of `points` (which drives the tier system). It
     // is a spendable currency awarded by admins / earned through
     // specific actions, and only consumed by the Golden Ticket flow.
-    sp: { type: Number, default: 0, min: 0 },
+    // v1.65.1 — Default starting balance. New users register with
+    // 100 SP. The default doesn't retroactively update existing
+    // users — they keep whatever they had; a one-off backfill
+    // (see backfillStartingSp.ts) lifts anyone at sp=0 up to 100.
+    sp: { type: Number, default: 100, min: 0 },
     // Cooldown provenance for the Golden flow. NULL = no active cooldown.
     lastGoldenTicketAt:     { type: Date, default: null },
     lastGoldenRejectionAt:  { type: Date, default: null },
+    // v1.65.1 — Ban timestamp. NULL = not banned. Stamped on Golden
+    // rejection; the createSupportRequest gate refuses any Golden
+    // submission while this is in the future. Same null = "no
+    // active ban" semantics as the cooldown fields.
+    goldenBannedUntil:      { type: Date, default: null },
   },
   { timestamps: true }
 );

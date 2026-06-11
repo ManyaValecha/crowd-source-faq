@@ -345,9 +345,9 @@ export async function awardSpurtiPointsAdmin(req: Request, res: Response): Promi
 /**
  * GET /api/support/me/sp
  * Returns the authenticated user's current SP balance + their
- * Golden Ticket cooldown status (so the frontend can render a
- * countdown without making a second request). Cheap — single
- * indexed read, no joins.
+ * Golden Ticket cooldown + ban status (so the frontend can render
+ * the countdown / banned banner without making a second request).
+ * Cheap — single indexed read, no joins.
  */
 export async function getMySpurtiPoints(req: Request, res: Response): Promise<void> {
   const userId = getAuthedUserId(req);
@@ -356,9 +356,10 @@ export async function getMySpurtiPoints(req: Request, res: Response): Promise<vo
   try {
     const { default: User } = await import('../models/User.js');
     const { readSetting } = await import('../models/AppSetting.js');
-    const [user, cooldownHours] = await Promise.all([
-      User.findById(userId).select('sp lastGoldenRejectionAt').lean(),
+    const [user, cooldownHours, banHours] = await Promise.all([
+      User.findById(userId).select('sp lastGoldenRejectionAt goldenBannedUntil').lean(),
       readSetting('goldenCooldownHours', 48),
+      readSetting('goldenBanHours', 72),
     ]);
     if (!user) {
       res.status(404).json({ message: 'User not found.' });
@@ -368,11 +369,19 @@ export async function getMySpurtiPoints(req: Request, res: Response): Promise<vo
     const cooldownEndsAt = lastRej && cooldownHours > 0
       ? new Date(new Date(lastRej).getTime() + cooldownHours * 60 * 60 * 1000).toISOString()
       : null;
-    const canSubmitGolden = !cooldownEndsAt || new Date(cooldownEndsAt).getTime() <= Date.now();
+    const bannedUntil = user.goldenBannedUntil as Date | string | null;
+    const bannedUntilIso = bannedUntil
+      ? new Date(bannedUntil).toISOString()
+      : null;
+    const isBanned = !!(bannedUntilIso && new Date(bannedUntilIso).getTime() > Date.now());
+    const canSubmitGolden = !isBanned && (!cooldownEndsAt || new Date(cooldownEndsAt).getTime() <= Date.now());
     res.json({
       sp: user.sp ?? 0,
       cooldownHours,
       cooldownEndsAt: canSubmitGolden ? null : cooldownEndsAt,
+      banHours,
+      bannedUntil: isBanned ? bannedUntilIso : null,
+      isBanned,
       canSubmitGolden,
     });
   } catch (err) {
@@ -408,8 +417,13 @@ export async function getGoldenQueue(req: Request, res: Response): Promise<void>
   const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit ?? '10')) || 10));
 
   try {
+    // v1.65.1 — Sort by spCost desc (biggest spenders at the top),
+    // tiebroken by createdAt desc (newest of the equal-SP group
+    // wins). Backed by the { isGolden: 1, spCost: -1, createdAt: -1 }
+    // index added on SupportRequest so this stays O(log n) even
+    // when the Golden ticket pool grows.
     const docs = await SupportRequest.find({ isGolden: true })
-      .sort({ createdAt: -1 })
+      .sort({ spCost: -1, createdAt: -1 })
       .limit(limit)
       .select('userId userName title details spCost status createdAt')
       .lean();

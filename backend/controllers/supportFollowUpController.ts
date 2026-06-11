@@ -213,14 +213,27 @@ export async function updateSupportStatus(req: Request, res: Response): Promise<
     // even. Default 1.25. Cooldown duration is also configurable via
     // `goldenCooldownHours` (default 48). The penalty + cooldown
     // together replace the old "refund + 24h" behaviour.
+    //
+    // v1.65.1 — also stamp a 72h ban (configurable via
+    // `goldenBanHours`) on the user. The ban is the loud, user-facing
+    // punishment: it shows a sticky "you are banned" banner on the
+    // GoldenTicket page and blocks all Golden submissions for the
+    // ban duration. The cooldown is the quiet, server-side guard.
+    // Both timers start on the same event (rejection) so they
+    // decay together in practice; the ban simply lives longer.
     let goldenRejectionEndsAt: Date | null = null;
+    let goldenBannedUntil: Date | null = null;
     let goldenPenaltySp = 0;
     if (nextStatus === 'Rejected' && request.isGolden) {
       const { readSetting } = await import('../models/AppSetting.js');
       const cooldownHours = await readSetting('goldenCooldownHours', 48);
+      const banHours = await readSetting('goldenBanHours', 72);
       const penaltyMultiplier = await readSetting('goldenPenaltyMultiplier', 1.25);
       if (cooldownHours > 0) {
         goldenRejectionEndsAt = new Date(Date.now() + cooldownHours * 60 * 60 * 1000);
+      }
+      if (banHours > 0) {
+        goldenBannedUntil = new Date(Date.now() + banHours * 60 * 60 * 1000);
       }
       // Penalty is the spent SP times the multiplier. Ceiling the
       // result so a fractional SP penalty never becomes a positive
@@ -277,9 +290,10 @@ export async function updateSupportStatus(req: Request, res: Response): Promise<
     // submit another ticket immediately. Non-Golden rejections leave
     // the user field untouched. Reuses the `User` import already in
     // scope.
-    if (goldenRejectionEndsAt || goldenPenaltySp > 0) {
+    if (goldenRejectionEndsAt || goldenBannedUntil || goldenPenaltySp > 0) {
       const setOps: Record<string, unknown> = {};
       if (goldenRejectionEndsAt) setOps.lastGoldenRejectionAt = goldenRejectionEndsAt;
+      if (goldenBannedUntil) setOps.goldenBannedUntil = goldenBannedUntil;
       if (goldenPenaltySp > 0) {
         // Deduct the penalty from the user's wallet. The helper
         // throws on insufficient balance (which is fine — the user

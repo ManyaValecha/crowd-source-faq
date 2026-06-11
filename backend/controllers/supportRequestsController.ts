@@ -131,10 +131,33 @@ export async function createSupportRequest(req: Request, res: Response): Promise
   const spCostRequested = Math.max(0, Math.trunc(Number(body.spCost) || 0));
   if (isGoldenRequested) {
     const { readSetting } = await import('../models/AppSetting.js');
-    const cooldownHours = await readSetting('goldenCooldownHours', 48);
+    const [{ default: User }, cooldownHours, banHours] = await Promise.all([
+      import('../models/User.js'),
+      readSetting('goldenCooldownHours', 48),
+      readSetting('goldenBanHours', 72),
+    ]);
+    const requester = await User.findById(userId)
+      .select('lastGoldenRejectionAt goldenBannedUntil')
+      .lean();
+
+    // v1.65.1 — Ban check fires before the cooldown check because the
+    // ban is the more severe condition (longer duration, user-facing
+    // banner). Both are time-based fields; the user is "banned" iff
+    // goldenBannedUntil is in the future. Returning 403 (not 429)
+    // because a ban is a state, not a rate limit.
+    if (requester?.goldenBannedUntil) {
+      const bannedUntilMs = new Date(requester.goldenBannedUntil).getTime();
+      if (bannedUntilMs > Date.now()) {
+        res.status(403).json({
+          message: `You are banned from submitting Golden Tickets until ${new Date(bannedUntilMs).toISOString()}.`,
+          bannedUntil: new Date(bannedUntilMs).toISOString(),
+          banHours,
+        });
+        return;
+      }
+    }
+
     if (cooldownHours > 0) {
-      const { default: User } = await import('../models/User.js');
-      const requester = await User.findById(userId).select('lastGoldenRejectionAt').lean();
       const lastRej = requester?.lastGoldenRejectionAt;
       if (lastRej) {
         const endsAt = new Date(lastRej).getTime() + cooldownHours * 60 * 60 * 1000;

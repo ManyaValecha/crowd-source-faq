@@ -323,6 +323,13 @@ supportRequestSchema.index({ isGolden: 1, status: 1, createdAt: -1 });
 // Cooldown / analytics: count a user's Golden tickets in a date window.
 supportRequestSchema.index({ userId: 1, isGolden: 1, createdAt: -1 });
 
+// v1.65.1 — Escalation Queue: spCost desc with createdAt desc
+// tiebreaker. Backed by a compound index so the queue stays O(log n)
+// even as the Golden ticket pool grows. The shape of the index
+// (isGolden + spCost + createdAt) matches the exact query used by
+// getGoldenQueue.
+supportRequestSchema.index({ isGolden: 1, spCost: -1, createdAt: -1 });
+
 export default mongoose.model<ISupportRequest>(
   'SupportRequest',
   supportRequestSchema,
