@@ -28,6 +28,8 @@ interface PendingLog {
   resultsCount: number;
   topResultId: Types.ObjectId | null;
   topResultSource: 'faq' | 'community' | 'knowledge' | null;
+  // v1.68 — M1: optional userId (anonymous searches leave it null)
+  userId: Types.ObjectId | null;
   createdAt: Date;
 }
 
@@ -192,6 +194,13 @@ const runVectorSearch = async (collectionName: string, queryEmbedding: number[],
 export const semanticSearch = async (req: Request, res: Response): Promise<void> => {
   try {
     const { query } = req.body as { query?: string };
+    // v1.68 — M1: capture the requester's userId so the
+    // admin User Activity chart can show unique user counts.
+    // Anonymous searches leave it null.
+    const userId = (req as Request & { user?: { _id?: Types.ObjectId | string } }).user?._id ?? null;
+    const userObjectId = userId
+      ? (typeof userId === 'string' ? new Types.ObjectId(userId) : userId)
+      : null;
 
     if (!query) {
       res.status(400).json({ message: 'query string is required.' });
@@ -212,6 +221,7 @@ export const semanticSearch = async (req: Request, res: Response): Promise<void>
         resultsCount: cachedResults.length,
         topResultId: topResult?._id ?? null,
         topResultSource: topResult?.source ?? null,
+        userId: userObjectId,
       });
       res.json({ results: cachedResults, total: cachedResults.length, cached: true });
       return;
@@ -229,6 +239,7 @@ export const semanticSearch = async (req: Request, res: Response): Promise<void>
         resultsCount: cachedResults.length,
         topResultId: topResult?._id ?? null,
         topResultSource: topResult?.source ?? null,
+        userId: userObjectId,
       });
       res.json({ results: cachedResults, total: cachedResults.length, cached: true });
       return;
@@ -281,6 +292,7 @@ export const semanticSearch = async (req: Request, res: Response): Promise<void>
             resultsCount: final.length,
             topResultId: (final[0]?._id as Types.ObjectId) ?? null,
             topResultSource: 'knowledge',
+            userId: userObjectId,
           });
           searchRequests.inc({ source: 'fresh', cached: 'false' });
           searchResultsReturned.observe({ source: 'fresh' }, final.length);
@@ -303,6 +315,7 @@ export const semanticSearch = async (req: Request, res: Response): Promise<void>
       resultsCount: filtered.length,
       topResultId: topResult?._id ?? null,
       topResultSource: topResult?.source ?? null,
+      userId: userObjectId,
     });
 
     searchRequests.inc({ source: 'fresh', cached: 'false' });

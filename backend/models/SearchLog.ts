@@ -9,6 +9,11 @@ export interface ISearchLog extends Document {
   resultsCount: number;
   topResultId: Types.ObjectId | null;
   topResultSource: ResultSource;
+  // v1.68 — M1: add userId so the admin User Activity chart
+  // can show unique user counts (not just search count).
+  // Optional for anonymous searches (no req.user); required
+  // for logged-in searches.
+  userId?: Types.ObjectId | null;
 }
 
 // Schema designed to track user search behavior for analytics and trending topics
@@ -31,6 +36,13 @@ const searchLogSchema = new MongooseSchema(
       type: String,
       enum: ['faq', 'community', 'knowledge', null] as ResultSource[], // Identifies whether the best answer came from official FAQs, user posts, or the auto-extracted knowledge base
       default: null,
+    },
+    // v1.68 — M1
+    userId: {
+      type: MongooseSchema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      index: true, // for the user-activity aggregation
     },
   },
   { timestamps: true } // Automatically records exactly when the search happened via 'createdAt'

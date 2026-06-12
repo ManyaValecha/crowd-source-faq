@@ -455,18 +455,33 @@ export const getUserActivityChart = async (req: Request, res: Response): Promise
     const days = parseInt(req.query.days as string) || 14;
     const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-    // Aggregate actual search activity per day: count searches and unique users
+    // Aggregate actual search activity per day: count searches + unique users.
+    // v1.68 — M1: SearchLog now has a userId field. The aggregation
+    // uses $addToSet to count distinct userIds per day, then $size
+    // to count the set. Anonymous searches (userId=null) are
+    // excluded from the unique count.
     const searchActivity = await SearchLog.aggregate([
       { $match: { createdAt: { $gte: from } } },
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
           searches: { $sum: 1 },
-          // Aggregate by distinct userId from SearchLog (topResultId captures which result was clicked,
-          // but we don't have a direct userId field — use result count as proxy for engagement)
-          // NOTE: SearchLog doesn't store userId — users field tracks search count as engagement proxy.
-          // For accurate user counts, a separate UserActivityLog would be needed.
-          userCount: { $sum: 1 },
+          uniqueUsers: { $addToSet: '$userId' },
+        },
+      },
+      {
+        $project: {
+          searches: 1,
+          // Count the set minus the null (anonymous) bucket.
+          users: {
+            $size: {
+              $filter: {
+                input: '$uniqueUsers',
+                as: 'u',
+                cond: { $ne: ['$$u', null] },
+              },
+            },
+          },
         },
       },
       { $sort: { _id: 1 } },
@@ -480,8 +495,7 @@ export const getUserActivityChart = async (req: Request, res: Response): Promise
       result.push({
         date: dateStr,
         searches: found ? found.searches : 0,
-        // Use actual search count as engagement proxy (SearchLog has no userId field)
-        users: found ? found.userCount : 0,
+        users: found ? found.users : 0,
       });
     }
 
