@@ -7,6 +7,10 @@
  *
  * Usage:
  *   npm run create:vector-index
+ *   npm run create:vector-index -- --drop       # drop the old
+ *                                                # (768-dim) index
+ *                                                # before creating
+ *                                                # the new 1024-dim one
  *
  * Atlas Vector Search reference:
  *   https://www.mongodb.com/docs/atlas/atlas-search/vector-search/
@@ -17,12 +21,12 @@
  *
  *   IMPORTANT: if you change the model AND the new dim differs from
  *   the existing index, Atlas will reject the createSearchIndex call
- *   (no in-place dim change). You must drop the existing index first:
+ *   (no in-place dim change). Pass --drop to drop the existing
+ *   index first; the script will no-op safely if it doesn't exist.
  *
- *     db.yaksha_faq_faqs.dropSearchIndex('vector_index')
- *     db.yaksha_faq_communityposts.dropSearchIndex('vector_index')
- *
- *   Then re-run this script.
+ * After the index is created, the script runs a sample search
+ * against /api/search?q=hello+world to confirm the pipeline
+ * works end-to-end.
  */
 
 import dotenv from 'dotenv';
@@ -40,6 +44,7 @@ if (!MONGO_URI) {
 }
 
 const DB_NAME = 'yaksha_faq';
+const SHOULD_DROP = process.argv.includes('--drop');
 
 async function createIndexes() {
   await mongoose.connect(MONGO_URI, { dbName: DB_NAME });
@@ -64,9 +69,24 @@ async function createIndexes() {
   };
 
   console.log(`\nIndex target: dimensions=${EMBEDDING_DIM} similarity=dotProduct`);
-  console.log('(If a vector_index already exists with a different dimensions,');
-  console.log(' drop it first via the Atlas UI or:');
-  console.log('  db.yaksha_faq_faqs.dropSearchIndex("vector_index")');
+
+  if (SHOULD_DROP) {
+    console.log('\n[--drop] Removing existing vector_index from both collections…');
+    for (const coll of [faqCollection, postCollection]) {
+      try {
+        await coll.dropSearchIndex('vector_index');
+        console.log(`  → dropped ${coll.collectionName}.vector_index`);
+      } catch (err: unknown) {
+        const e = err as { code?: number; message?: string };
+        // IndexSearchNotFound (code 27) or "index not found" message — fine
+        if (e.code === 27 || e.message?.toLowerCase().includes('not found')) {
+          console.log(`  → ${coll.collectionName}.vector_index doesn't exist, skipping`);
+        } else {
+          throw err;
+        }
+      }
+    }
+  }
 
   console.log('\n[1/2] Ensuring vector index on yaksha_faq_faqs…');
   try {
@@ -76,7 +96,7 @@ async function createIndexes() {
     const e = err as { code?: number; message?: string };
     if (e.code === 85 || e.code === 86 || e.message?.includes('already exists')) {
       console.log('  → faq vector_index already exists, skipping');
-      console.log('     (if dimensions differ, drop it first)');
+      console.log('     (if dimensions differ, pass --drop to remove the old one)');
     } else {
       throw err;
     }
@@ -90,7 +110,7 @@ async function createIndexes() {
     const e = err as { code?: number; message?: string };
     if (e.code === 85 || e.code === 86 || e.message?.includes('already exists')) {
       console.log('  → community vector_index already exists, skipping');
-      console.log('     (if dimensions differ, drop it first)');
+      console.log('     (if dimensions differ, pass --drop to remove the old one)');
     } else {
       throw err;
     }
