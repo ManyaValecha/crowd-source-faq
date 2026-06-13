@@ -18,12 +18,14 @@
     "seed:search-logs": "tsx scripts/seedSearchLogs.ts",
     "seed:badges": "tsx scripts/seedBadges.ts",
     "add:post": "tsx scripts/addPost.ts",
-    "backfill:community": "tsx scripts/backfillCommunityEmbeddings.ts"
+    "backfill:community": "tsx scripts/backfillCommunityEmbeddings.ts",
+    "backfill:public-metrics": "tsx scripts/backfillPublicMetrics.ts",
+    "audit:data": "tsx scripts/auditData.ts"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "@sentry/node": "^10.55.0",
     "@upstash/redis": "^1.38.0",
-    "@huggingface/transformers": "^3.8.1",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.78.0",
     "cors": "^2.8.5",
