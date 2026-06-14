@@ -106,6 +106,50 @@ programReputationSchema.pre('save', function (next) {
   next();
 });
 
+/**
+ * v1.69 — Phase 7: helper to award points/SP to a user inside a
+ * specific program. Upserts the (userId, batchId) row if missing,
+ * then atomic $inc on the right fields. The pre-save hook keeps
+ * `tier` in sync.
+ *
+ * Backwards compat (per the plan): the global User.points / sp
+ * is also kept up to date as a sum across programs. We do that
+ * with a $inc on User, not by recomputing the aggregate.
+ */
+export interface AwardInput {
+  points?: number;
+  sp?: number;
+  acceptedAnswers?: number;
+  faqContributions?: number;
+}
+
+export async function awardToUser(
+  userId: Types.ObjectId | string,
+  batchId: Types.ObjectId | string,
+  input: AwardInput
+): Promise<void> {
+  const safePoints = input.points ?? 0;
+  const safeSp = input.sp ?? 0;
+  const safeAccepted = input.acceptedAnswers ?? 0;
+  const safeFaqContrib = input.faqContributions ?? 0;
+
+  const setInc: Record<string, number> = {};
+  if (safePoints !== 0) setInc.points = safePoints;
+  if (safeSp !== 0) setInc.sp = safeSp;
+  if (safeAccepted !== 0) setInc.acceptedAnswers = safeAccepted;
+  if (safeFaqContrib !== 0) setInc.faqContributions = safeFaqContrib;
+  if (Object.keys(setInc).length === 0) return;
+
+  await ProgramReputation.findOneAndUpdate(
+    { userId, batchId },
+    {
+      $setOnInsert: { userId, batchId, tier: 'newcomer' },
+      $inc: setInc,
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+}
+
 export default mongoose.model<IProgramReputation>(
   'ProgramReputation',
   programReputationSchema,

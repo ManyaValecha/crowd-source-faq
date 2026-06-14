@@ -2,6 +2,10 @@ import { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import CommunityPost from '../models/CommunityPost.js';
 import User, { IUser, calculateTier } from '../models/User.js';
+// v1.69 — Phase 7: per-program reputation writes. The User
+// document keeps the global aggregate (backwards compat); the
+// ProgramReputation row is the per-program source of truth.
+import { awardToUser } from '../models/ProgramReputation.js';
 import ReputationLog from '../models/ReputationLog.js';
 import { autoAwardBadges } from './reputationController.js';
 import { sanitizeHtml } from '../utils/http/sanitize.js';
@@ -376,6 +380,11 @@ export const acceptCommentAnswer = async (req: Request, res: Response): Promise<
     // ── Award +20 to answer author for accepted answer ───────────────────────
     const answerAuthorId = (comment.author as Types.ObjectId).toString();
     if (answerAuthorId !== req.user!._id.toString()) {
+      // v1.69 — Phase 7: dual write. The User document keeps the
+      // global aggregate (sum across programs — backwards compat
+      // for the existing cross-program leaderboard / user
+      // profile). ProgramReputation is the per-program source of
+      // truth and drives the per-program leaderboard.
       const answerAuthor = await User.findByIdAndUpdate(
         answerAuthorId,
         { $inc: { points: 20, reputation: 20, acceptedAnswers: 1 } },
@@ -384,11 +393,20 @@ export const acceptCommentAnswer = async (req: Request, res: Response): Promise<
       if (answerAuthor) {
         answerAuthor.tier = calculateTier(answerAuthor.points);
         await answerAuthor.save();
+        // Per-program write. The post's batchId is the program
+        // context for the reputation delta.
+        await awardToUser(answerAuthorId, post.batchId as Types.ObjectId, {
+          points: 20,
+          acceptedAnswers: 1,
+        }).catch((err) => {
+          communityLog.warn(`[comment] ProgramReputation write failed for ${answerAuthorId}: ${(err as Error).message}`);
+        });
         autoAwardBadges(answerAuthorId).catch((err) => {
           communityLog.warn(`[comment] Failed to auto-award badges to ${answerAuthorId}: ${(err as Error).message}`);
         });
         await ReputationLog.create({
           userId: new Types.ObjectId(answerAuthorId),
+          batchId: post.batchId ?? null, // v1.69 — scope the log
           delta: 20,
           reason: `Answer accepted on post "${post.title.slice(0, 40)}"`,
           action: 'answer_accepted',
