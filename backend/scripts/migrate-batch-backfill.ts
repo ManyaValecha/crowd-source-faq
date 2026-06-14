@@ -34,6 +34,10 @@ import Notification from '../models/Notification.js';
 import TeaNotification from '../models/TeaNotification.js';
 import SupportRequest from '../models/SupportRequest.js';
 import AiQuestion from '../models/AiQuestion.js';
+// v1.69 — Phase 11: per-user-per-program aggregates
+import ProgramReputation from '../models/ProgramReputation.js';
+import ProgramEnrollment from '../models/ProgramEnrollment.js';
+import User from '../models/User.js';
 
 const MONGODB_URI = process.env.MONGODB_URI;
 if (!MONGODB_URI) {
@@ -132,7 +136,98 @@ async function main(): Promise<void> {
   );
   console.log(`  ✓ FeatureFlag: ${featureFlagResult.modifiedCount} doc(s) backfilled (batchId: null)`);
 
-  console.log(`\nDone. ${total} document(s) backfilled across ${TARGETS.length} collection(s); ${settingsCreated} ProgramSettings created; ${aiConfigResult.modifiedCount + featureFlagResult.modifiedCount} per-program scope(s) backfilled.`);
+  // v1.69 — Phase 11: ProgramReputation backfill. Every user
+  // gets a per-user-per-program reputation record in the
+  // default program, seeded from their current User.points /
+  // sp / tier / acceptedAnswers / faqContributions. This is
+  // the source of truth for the per-program leaderboard added
+  // in Phase 3i. After the migration, the existing User.points
+  // stays as the global aggregate (sum across programs) for
+  // backwards compat; new writes dual-update both via
+  // awardToUser (Phase 7).
+  console.log(`\n[6/6] Backfilling ProgramReputation for the default program...`);
+  const defaultBatchForRep = await Batch.findOne({ isDefault: true }).select('_id name').lean();
+  if (!defaultBatchForRep) {
+    console.log('  ⚠ No default program found — skipping ProgramReputation backfill.');
+  } else {
+    const defaultRepBatchId = new Types.ObjectId(String(defaultBatchForRep._id));
+    let repCreated = 0;
+    const userCursor = User.find({})
+      .select('_id points sp tier acceptedAnswers faqContributions lastGoldenTicketAt lastGoldenRejectionAt')
+      .lean().cursor({ batchSize: 200 });
+    for await (const u of userCursor) {
+      if (!u._id) continue;
+      const exists = await ProgramReputation.exists({ userId: u._id, batchId: defaultRepBatchId });
+      if (exists) continue;
+      await ProgramReputation.create({
+        userId: u._id,
+        batchId: defaultRepBatchId,
+        points: u.points ?? 0,
+        sp: u.sp ?? 0,
+        tier: u.tier ?? 'newcomer',
+        acceptedAnswers: u.acceptedAnswers ?? 0,
+        faqContributions: u.faqContributions ?? 0,
+        lastGoldenTicketAt: u.lastGoldenTicketAt ?? null,
+        lastGoldenRejectionAt: u.lastGoldenRejectionAt ?? null,
+      });
+      repCreated++;
+    }
+    console.log(`  ✓ Created ProgramReputation for ${repCreated} user(s) in default program '${defaultBatchForRep.name}'`);
+  }
+
+  // v1.69 — Phase 11: ProgramEnrollment backfill. Every user is
+  // enrolled as a 'student' in the default program. Admin/moderator
+  // roles keep their global permissions; this enrollment just
+  // makes the per-program authz chain happy for the existing
+  // single-tenant users. The default enrollmentMode on each
+  // Batch is 'open' (from the model), so future users can
+  // self-enroll.
+  console.log(`\n[7/7] Backfilling ProgramEnrollment for the default program...`);
+  const defaultBatchForEnr = await Batch.findOne({ isDefault: true }).select('_id name').lean();
+  if (!defaultBatchForEnr) {
+    console.log('  ⚠ No default program found — skipping ProgramEnrollment backfill.');
+  } else {
+    const defaultEnrBatchId = new Types.ObjectId(String(defaultBatchForEnr._id));
+    let enrCreated = 0;
+    const userCursor2 = User.find({})
+      .select('_id role')
+      .lean().cursor({ batchSize: 200 });
+    for await (const u of userCursor2) {
+      if (!u._id) continue;
+      const exists = await ProgramEnrollment.exists({ userId: u._id, batchId: defaultEnrBatchId });
+      if (exists) continue;
+      // Admins and moderators get the matching program-role
+      // so they can act inside the program without a separate
+      // enrollment step. Everyone else is a student.
+      const programRole = u.role === 'admin'
+        ? 'program_admin'
+        : u.role === 'moderator'
+          ? 'moderator'
+          : 'student';
+      await ProgramEnrollment.create({
+        userId: u._id,
+        batchId: defaultEnrBatchId,
+        programRole,
+        enrolledBy: null,
+        isActive: true,
+      });
+      enrCreated++;
+    }
+    console.log(`  ✓ Enrolled ${enrCreated} user(s) in default program '${defaultBatchForEnr.name}'`);
+  }
+
+  // v1.69 — Phase 11: default enrollmentMode. The pre-Phase-1
+  // batches had no enrollmentMode field. Set them all to
+  // 'open' so existing users can still self-enroll (matches
+  // the schema default).
+  console.log(`\n[8/8] Defaulting Batch.enrollmentMode to 'open'...`);
+  const enrollmentModeResult = await Batch.updateMany(
+    { enrollmentMode: { $exists: false } },
+    { $set: { enrollmentMode: 'open' } }
+  );
+  console.log(`  ✓ Batch: ${enrollmentModeResult.modifiedCount} doc(s) defaulted to enrollmentMode: 'open'`);
+
+  console.log(`\nDone. ${total} document(s) backfilled across ${TARGETS.length} collection(s); ${settingsCreated} ProgramSettings created; ${aiConfigResult.modifiedCount + featureFlagResult.modifiedCount} per-program scope(s) backfilled; ProgramReputation + ProgramEnrollment backfill complete.`);
   process.exit(0);
 }
 
