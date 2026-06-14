@@ -63,8 +63,8 @@ export async function getProgramZoomConfig(
       // v1.69 — Phase 5: dynamic import so the file can be
       // loaded even when the program is mid-migration and the
       // ProgramConfig model hasn't been created yet.
-      const { default: ProgramConfig } = await import('../models/ProgramConfig.js');
-      const { decrypt } = await import('../utils/auth/crypto.js');
+      const { default: ProgramConfig } = await import('../../models/ProgramConfig.js');
+      const { decrypt } = await import('../../utils/auth/crypto.js');
       const doc = await ProgramConfig.findOne({ batchId }).select('+zoom.clientSecret +zoom.webhookSecretToken +zoom.accessToken +zoom.refreshToken').lean();
       if (doc?.zoom?.clientId && doc.zoom.clientSecret) {
         return {
@@ -210,11 +210,23 @@ export function verifyOAuthState(state: string): string | null {
   }
 }
 
-export function buildZoomAuthUrl(internalUserId: string, request?: { headers?: Record<string, string | string[] | undefined>; protocol?: string }): string {
+/**
+ * v1.69 — Phase 5 runtime: per-program Zoom OAuth flow.
+ * When `batchId` is supplied, the URL is built with the
+ * per-program Zoom app's client_id (resolved via
+ * getProgramZoomConfig). When null, the env-var-backed
+ * global Zoom app is used (backwards compat).
+ */
+export async function buildZoomAuthUrl(
+  internalUserId: string,
+  request?: { headers?: Record<string, string | string[] | undefined>; protocol?: string },
+  batchId: string | null = null
+): Promise<string> {
   const redirectUri = buildDynamicRedirectUri(request);
+  const cfg = await getProgramZoomConfig(batchId);
   const params = new URLSearchParams({
     response_type: 'code',
-    client_id: getClientId(),
+    client_id: cfg.clientId,
     redirect_uri: redirectUri,
     state: signOAuthState(internalUserId),
   });
@@ -235,9 +247,18 @@ interface ZoomTokens {
  * Exchange an authorization code for Zoom tokens.
  * Protected by the zoomOAuth circuit breaker.
  */
-export async function exchangeCodeForTokens(code: string): Promise<ZoomTokens> {
+/**
+ * v1.69 — Phase 5 runtime: per-program token exchange.
+ * When `batchId` is supplied, the per-program Zoom app's
+ * client_id/secret is used (resolved via
+ * getProgramZoomConfig). The user's stored OAuth token is
+ * then scoped to that program — every subsequent API call
+ * via that token operates against the program's Zoom app.
+ */
+export async function exchangeCodeForTokens(code: string, batchId: string | null = null): Promise<ZoomTokens> {
+  const cfg = await getProgramZoomConfig(batchId);
   return await zoomOAuthCircuit.execute(async () => {
-    const credentials = Buffer.from(`${getClientId()}:${getClientSecret()}`).toString('base64');
+    const credentials = Buffer.from(`${cfg.clientId}:${cfg.clientSecret}`).toString('base64');
 
     const res = await fetch(`${ZOOM_TOKEN_URL}?grant_type=authorization_code&code=${code}&redirect_uri=${encodeURIComponent(getRedirectUri())}`, {
       method: 'POST',
@@ -260,9 +281,16 @@ export async function exchangeCodeForTokens(code: string): Promise<ZoomTokens> {
  * Refresh a user's Zoom tokens using their stored refresh token.
  * Protected by the zoomOAuth circuit breaker.
  */
-export async function refreshZoomTokens(refreshToken: string): Promise<ZoomTokens> {
+/**
+ * v1.69 — Phase 5 runtime: per-program token refresh.
+ * When `batchId` is supplied, the per-program Zoom app's
+ * client_id/secret is used. The refreshed token is
+ * re-bound to that program in the User doc.
+ */
+export async function refreshZoomTokens(refreshToken: string, batchId: string | null = null): Promise<ZoomTokens> {
+  const cfg = await getProgramZoomConfig(batchId);
   return await zoomOAuthCircuit.execute(async () => {
-    const credentials = Buffer.from(`${getClientId()}:${getClientSecret()}`).toString('base64');
+    const credentials = Buffer.from(`${cfg.clientId}:${cfg.clientSecret}`).toString('base64');
 
     const res = await fetch(`${ZOOM_TOKEN_URL}?grant_type=refresh_token&refresh_token=${refreshToken}`, {
       method: 'POST',

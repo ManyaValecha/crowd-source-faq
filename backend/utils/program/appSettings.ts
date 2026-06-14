@@ -83,7 +83,11 @@ export async function getProgramAppSettings(
   // Merge: per-program wins over global. For each known key
   // we resolve to the per-program value if set, falling back
   // to the global value, with the schema default last.
-  const knownKeys: SettingKey[] = ['goldenCooldownHours', 'goldenPenaltyMultiplier', 'goldenSpCost'];
+  // v1.69 — The `as const` keeps the tuple typed as a
+  // readonly array of the three known SettingKey literals,
+  // which lets tsc narrow the `merged[k]` writes below
+  // without flagging the indexed access.
+  const knownKeys = ['goldenCooldownHours', 'goldenPenaltyMultiplier', 'goldenSpCost'] as const;
   const merged: ProgramAppSettings = {
     goldenTicketCooldownHours: perProgram.goldenTicketCooldownHours
       ?? global.goldenCooldownHours
