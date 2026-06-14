@@ -24,6 +24,8 @@ export interface ITeaNotification extends Document {
   triggeredByName?: string;
   // Snapshot of the answer/change (if applicable)
   content?: string;
+  /** v1.69 — Program this tea event was sourced from. */
+  batchId?: Types.ObjectId | null;
   read: boolean;
   createdAt: Date;
 }
@@ -67,6 +69,13 @@ const teaNotificationSchema = new MongooseSchema(
     triggeredByName: {
       type: String,
       trim: true,
+    },
+    // v1.69 — see interface.
+    batchId: {
+      type: MongooseSchema.Types.ObjectId,
+      ref: 'Batch',
+      default: null,
+      index: true,
     },
     // The answer text (for post_answered / post_answered_user)
     content: {

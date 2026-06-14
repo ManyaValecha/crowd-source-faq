@@ -34,7 +34,8 @@ const COMMANDS: HelpEntry[] = [
 
 export async function executeHelp(
   interaction: ChatInputCommandInteraction,
-  config: BotConfig
+  config: BotConfig,
+  batchId: string | null = null
 ): Promise<void> {
   const userIsAdmin = isAdmin(interaction, config);
   const lines = COMMANDS.map((c) => {

@@ -10,6 +10,7 @@ import 'dotenv/config';
 import mongoose from 'mongoose';
 import FAQ from '../models/FAQ.js';
 import User from '../models/User.js';
+import Batch from '../models/Batch.js';
 import { generateEmbedding } from '../utils/ai/embeddings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,13 +21,34 @@ if (!MONGODB_URI) {
   process.exit(1);
 }
 
+// v1.69 — the seed now bootstraps a default program (Batch) so the
+// public site has something to show. The flag is `isDefault: true`;
+// the BatchContext on the frontend prefers isDefault batches when no
+// batch is selected. Re-running the seed is idempotent: it only
+// creates the default batch if none exists, and only backfills FAQs
+// whose batchId is still null.
+const DEFAULT_BATCH = {
+  name: 'Yaksha 2026-27',
+  description:
+    'The two-month, full-time research internship at the Vicharanashala Lab, ' +
+    'IIT Ropar. Real open-source work under a mentor, free of charge.',
+  // Today → ~2 months out, so the program is "live" at seed time.
+  // These are placeholders; admins can edit dates from /admin/batches.
+  startDate: () => new Date(),
+  endDate: () => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + 2);
+    return d;
+  },
+};
+
 const seed = async () => {
   try {
     console.log('Connecting to MongoDB...');
     await mongoose.connect(MONGODB_URI);
 
     // Upsert users
-    console.log('[1/2] Seeding users...');
+    console.log('[1/3] Seeding users...');
     const users = [
       { name: 'Test User', email: 'user@yaksha.com', password: 'password123', role: 'user' },
       { name: 'Admin User', email: 'admin@yaksha.com', password: 'admin123', role: 'admin' },
@@ -47,8 +69,38 @@ const seed = async () => {
     }
     console.log('  ✓ Users upserted and passwords hashed');
 
+    // Bootstrap a default program (Batch). Idempotent: if any batch
+    // already has isDefault:true we leave it alone; otherwise we
+    // create the Yaksha 2026-27 batch and flag it as default.
+    console.log('[2/3] Bootstrapping default program...');
+    let defaultBatch = await Batch.findOne({ isDefault: true });
+    if (!defaultBatch) {
+      // Edge case: a batch with the right name exists from a prior
+      // run but never had isDefault flipped. Promote it instead of
+      // creating a duplicate (the Batch name index is case-insensitive
+      // unique, so a plain create would throw on the second run).
+      defaultBatch = await Batch.findOne({ name: DEFAULT_BATCH.name });
+      if (defaultBatch) {
+        defaultBatch.isDefault = true;
+        await defaultBatch.save();
+        console.log(`  ✓ Promoted existing batch "${defaultBatch.name}" to isDefault: true`);
+      } else {
+        defaultBatch = await Batch.create({
+          name: DEFAULT_BATCH.name,
+          description: DEFAULT_BATCH.description,
+          startDate: DEFAULT_BATCH.startDate(),
+          endDate: DEFAULT_BATCH.endDate(),
+          isActive: true,
+          isDefault: true,
+        });
+        console.log(`  ✓ Created default batch "${defaultBatch.name}" (${defaultBatch._id})`);
+      }
+    } else {
+      console.log(`  ✓ Default batch already exists: "${defaultBatch.name}" (${defaultBatch._id})`);
+    }
+
     // Upsert FAQs from faqs.json
-    console.log('[2/2] Seeding FAQs...');
+    console.log('[3/3] Seeding FAQs...');
     const faqPath = path.join(__dirname, '..', 'faqs.json');
     try {
       const faqDataRaw = await fs.readFile(faqPath, 'utf-8');
@@ -73,12 +125,27 @@ const seed = async () => {
           category: faq.category ?? faq.section ?? 'General',
           embedding,
           searchCount: 0,
+          // Tie every newly-seeded FAQ to the default program so the
+          // public home page actually has data to render.
+          batchId: defaultBatch._id,
         });
         inserted++;
         if ((i + 1) % 10 === 0) console.log(`  Processed ${i + 1}/${allFaqs.length} (${inserted} inserted, ${skipped} skipped)`);
       }
 
       console.log(`  ✓ ${inserted} inserted, ${skipped} skipped`);
+
+      // One-time backfill: any pre-existing FAQ with batchId:null
+      // (e.g. from an earlier seed run before this commit) gets
+      // attached to the default batch so the public list isn't empty.
+      const orphaned = await FAQ.countDocuments({ batchId: null });
+      if (orphaned > 0) {
+        const res = await FAQ.updateMany(
+          { batchId: null },
+          { $set: { batchId: defaultBatch._id } }
+        );
+        console.log(`  ✓ Backfilled ${res.modifiedCount} orphaned FAQ(s) to default batch`);
+      }
     } catch (err) {
       console.warn(`  ⚠ Warning: Could not read faqs.json from ${faqPath}. Skipping FAQ seeding. ${(err as Error).message}`);
     }

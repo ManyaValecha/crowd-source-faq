@@ -66,6 +66,13 @@ export interface IFAQ extends Document {
   // ── Batch + Category scoping ────────────────────────────────────────────
   /** The program run (e.g. "Summer Internship 2026") this FAQ belongs to. */
   batchId: Types.ObjectId | null;
+  /**
+   * v1.69 — Course within the internship this FAQ belongs to.
+   * Optional during migration; the admin can re-tag FAQs once
+   * courses exist. The home page course-picker scopes the FAQ
+   * list by this field.
+   */
+  courseId?: Types.ObjectId | null;
   /** Optional reference to the canonical Category document. */
   categoryId: Types.ObjectId | null;
   // ── Public guest-page analytics (additive, computed fields) ────────────
@@ -261,6 +268,15 @@ const faqSchema = new MongooseSchema(
       type: MongooseSchema.Types.ObjectId,
       ref: 'Batch',
       required: false, // false during migration; the migrate script backfills
+      index: true,
+      default: null,
+    },
+    // v1.69 — see interface. Indexes the (courseId, status) path
+    // used by the public FAQs endpoint when the user picks a course.
+    courseId: {
+      type: MongooseSchema.Types.ObjectId,
+      ref: 'Course',
+      required: false,
       index: true,
       default: null,
     },

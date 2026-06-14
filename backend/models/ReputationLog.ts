@@ -3,6 +3,8 @@ import type { ReputationAction } from './User.js';
 
 export interface IReputationLog extends Document {
   userId: MongooseSchema.Types.ObjectId;
+  /** v1.69 — Program this reputation event belongs to. null = global. */
+  batchId?: MongooseSchema.Types.ObjectId | null;
   delta: number;
   reason: string;
   action: ReputationAction;
@@ -14,6 +16,15 @@ export interface IReputationLog extends Document {
 
 const reputationLogSchema = new MongooseSchema<IReputationLog>({
   userId: { type: MongooseSchema.Types.ObjectId, ref: 'User', required: true },
+  // v1.69 — per-program reputation. Index covers the
+  // "leaderboard for program X" query path.
+  batchId: {
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Batch',
+    required: false,
+    index: true,
+    default: null,
+  },
   delta: { type: Number, required: true },
   reason: { type: String, default: '' },
   action: { type: String, required: true },

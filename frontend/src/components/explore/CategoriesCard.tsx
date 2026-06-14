@@ -19,11 +19,13 @@ function TagIcon(): React.ReactElement {
 
 interface CategoriesCardProps {
   batchId: string | null;
+  /** v1.69 — optional course filter (from the home page picker). */
+  courseId?: string | null;
   onSelectCategory: (name: string) => void;
 }
 
-export function CategoriesCard({ batchId, onSelectCategory }: CategoriesCardProps): React.ReactElement {
-  const { data, loading } = useCategories(batchId, false);
+export function CategoriesCard({ batchId, courseId, onSelectCategory }: CategoriesCardProps): React.ReactElement {
+  const { data, loading } = useCategories(batchId, courseId, false);
   const visible = data?.categories.slice(0, 8) ?? [];
   const more = Math.max(0, (data?.categories.length ?? 0) - visible.length);
 

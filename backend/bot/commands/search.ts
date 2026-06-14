@@ -4,10 +4,13 @@
  * Public. Calls POST {PUBLIC_URL}/api/search, returns the
  * top 3 results as a single embed with question / category
  * / vector+text score / snippet.
+ *
+ * v1.69 — Phase 6+ per-guild → batchId routing.
  */
 
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import type { BotConfig } from '../discordBot.js';
+import { buildBotApiUrl, botApiHeaders } from '../events/botApi.js';
 
 export const searchCommandData = new SlashCommandBuilder()
   .setName('search')
@@ -40,7 +43,8 @@ interface SearchResult {
 
 export async function executeSearch(
   interaction: ChatInputCommandInteraction,
-  config: BotConfig
+  config: BotConfig,
+  batchId: string | null = null
 ): Promise<void> {
   const query = interaction.options.getString('query', true);
   const limit = interaction.options.getInteger('limit') ?? 3;
@@ -48,9 +52,9 @@ export async function executeSearch(
 
   let results: SearchResult[] = [];
   try {
-    const res = await fetch(`${config.publicUrl}/api/search`, {
+    const res = await fetch(buildBotApiUrl(config, '/api/search', batchId), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...botApiHeaders(config, batchId) },
       body: JSON.stringify({ query, topK: limit }),
     });
     if (res.ok) {

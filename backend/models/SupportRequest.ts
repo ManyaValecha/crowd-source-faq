@@ -207,6 +207,14 @@ export interface ISupportRequest extends Document {
   goldenRejectionReason: string;
   goldenRejectionEndsAt: Date | null;
 
+  /**
+   * v1.69 — Program this support ticket was opened within. Most
+   * support is program-agnostic (a flaky laptop doesn't care which
+   * cohort the user is in) but admins want the ability to slice
+   * "open tickets for Yaksha 2026-27" separately from "all open".
+   */
+  batchId?: Types.ObjectId | null;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -260,6 +268,13 @@ const statusHistorySubSchema = new MongooseSchema<ISupportStatusHistoryEntry>(
 const supportRequestSchema = new MongooseSchema<ISupportRequest>(
   {
     userId:    { type: MongooseSchema.Types.ObjectId, ref: 'User', required: true, index: true },
+    // v1.69 — see interface.
+    batchId: {
+      type: MongooseSchema.Types.ObjectId,
+      ref: 'Batch',
+      default: null,
+      index: true,
+    },
     userName:  { type: String, required: true, trim: true, maxlength: 100 },
     userEmail: { type: String, required: true, trim: true, lowercase: true, maxlength: 200 },
 

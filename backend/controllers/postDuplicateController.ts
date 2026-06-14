@@ -19,6 +19,8 @@ import { generateEmbedding, generateQueryEmbedding } from '../utils/ai/embedding
 import { detectDuplicatesWithAI } from '../utils/ai/duplicateDetector.js';
 import { resolveProviderAsync } from '../utils/ai/aiProvider.js';
 import { communityLog } from '../utils/http/logger.js';
+// v1.69 — Phase 3f: program-scope the duplicate detection search.
+import { withProgramScope } from '../utils/db/scopedQuery.js';
 
 // ─── Thresholds ────────────────────────────────────────────────────────────────
 
@@ -117,7 +119,8 @@ function textMatchScore(query: string, target: string): number {
 
 export async function checkDuplicate(
   query: string,
-  isShortQuery: boolean
+  isShortQuery: boolean,
+  batchId: string | null = null,
 ): Promise<DuplicateMatch[]> {
   const matches: DuplicateMatch[] = [];
   const lower = query.toLowerCase().trim();
@@ -135,7 +138,7 @@ export async function checkDuplicate(
     const [vectorResults, textResults] = await Promise.all([
       // Vector similarity
       queryEmbedding
-        ? FAQ.find({ embedding: { $exists: true, $ne: null }, status: 'approved' })
+        ? FAQ.find(withProgramScope({ embedding: { $exists: true, $ne: null }, status: 'approved' }, batchId))
             .select('_id question answer category embedding')
             .lean()
             .then((faqs) => {
@@ -163,7 +166,7 @@ export async function checkDuplicate(
         : Promise.resolve([]),
 
       // TF-IDF Jaccard
-      FAQ.find({ status: 'approved' })
+      FAQ.find(withProgramScope({ status: 'approved' }, batchId))
         .select('_id question answer category')
         .lean()
         .then((faqs) => {
@@ -202,14 +205,14 @@ export async function checkDuplicate(
   try {
     const qWords = significantWords(lower);
     if (qWords.length > 0) {
-      const textResults = await CommunityPost.find({
+      const textResults = await CommunityPost.find(withProgramScope({
         $or: [
           { title: { $regex: escapeRegex(lower), $options: 'i' } },
           ...qWords.slice(0, 8).map((w) => ({
             title: { $regex: `\\b${escapeRegex(w)}\\b`, $options: 'i' },
           })),
         ],
-      })
+      }, batchId))
         .select('_id title body status')
         .lean()
         .then((posts) => {
@@ -286,6 +289,10 @@ export const checkDuplicateController = async (
 
     if (aiAvailable) {
       // AI is the evaluator. Trust its verdict.
+      // v1.69 — Phase 3f: AI duplicate detection itself is not
+      // yet program-scoped (the AI's getVectorCandidates is a
+      // deeper refactor — Phase 4+). The caller still threads
+      // batchId so the keyword fallback below is scoped.
       matches = await detectDuplicatesWithAI(q);
     } else {
       // No AI configured — use knowledge base + keyword fallback
@@ -315,7 +322,7 @@ export const checkDuplicateController = async (
       if (matches.length === 0) {
         const words = q.split(' ').filter((w) => w.length >= 3);
         const isShortQuery = words.length < 3;
-        matches = await checkDuplicate(q, isShortQuery);
+        matches = await checkDuplicate(q, isShortQuery, req.programContext?.batchId ?? null);
       }
     }
 

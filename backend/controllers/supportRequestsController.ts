@@ -23,6 +23,12 @@ import SupportCategory, { type IContextField } from '../models/SupportCategory.j
 import { supportLog } from '../utils/http/logger.js';
 import { postNotification } from '../bot/notifications.js';
 import { assertCanCreateContent } from '../utils/banUtils.js';
+// v1.69 — Phase 3c: scope support reads by program. The middleware
+// attaches req.programContext (only when the URL/query carries a
+// valid batchId), so we thread it through the filter on the
+// read paths. Until the rollout flips required=true on the
+// programScope middleware, single-tenant callers still work.
+import { withCurrentProgram } from '../utils/db/scopedQuery.js';
 import {
   VALID_STATUSES,
   getAuthedUserId,
@@ -388,7 +394,10 @@ export async function listSupportRequests(req: Request, res: Response): Promise<
 
   try {
     const { status, issueType, q, userName, email, from, to, isGolden } = req.query as Record<string, string | undefined>;
-    const filter: Record<string, unknown> = isAdmin ? {} : { userId };
+    // v1.69 — Phase 3c: scope by program. Admins see all tickets in
+    // the active program; users see only their own within the program.
+    const baseFilter: Record<string, unknown> = isAdmin ? {} : { userId };
+    const filter = withCurrentProgram(baseFilter, req.programContext);
     const page = Math.max(1, parseInt(String(req.query.page ?? '1')) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? (isAdmin ? '25' : '20'))) || (isAdmin ? 25 : 20)));
     const skip = (page - 1) * limit;
@@ -535,6 +544,17 @@ export async function getSupportRequest(req: Request, res: Response): Promise<vo
     if (!request) {
       res.status(404).json({ message: 'Support request not found.' });
       return;
+    }
+    // v1.69 — Phase 3c: if a program context is attached, enforce it.
+    // Admins can still see across programs, but only if they didn't
+    // arrive via a program-scoped route.
+    const programContext = req.programContext;
+    if (programContext && !isAdmin) {
+      const ticketBatch = (request as { batchId?: Types.ObjectId | string | null }).batchId;
+      if (!ticketBatch || ticketBatch.toString() !== programContext.batchId) {
+        res.status(404).json({ message: 'Support request not found.' });
+        return;
+      }
     }
     if (!isAdmin && request.userId.toString() !== userId.toString()) {
       // Don't leak existence — return 404, not 403

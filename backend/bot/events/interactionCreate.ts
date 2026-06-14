@@ -3,6 +3,12 @@
  * all slash commands. The dispatcher is intentionally tiny:
  * the heavy lifting is in the per-command execute* files
  * under ./commands/.
+ *
+ * v1.69 — Phase 6+ per-guild → batchId routing: every
+ * per-program bot is keyed by batchId in BotManager. The
+ * runtime context passed to each command carries the
+ * batchId so the command can call the backend with
+ * `?batchId=...` and hit the right program's data.
  */
 
 import { Interaction, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
@@ -17,10 +23,32 @@ import { executeResolve } from '../commands/resolve.js';
 import { executeBan } from '../commands/ban.js';
 import { executeBroadcast } from '../commands/broadcast.js';
 
+/**
+ * v1.69 — Phase 6+ runtime context carried alongside the
+ * legacy BotConfig. The batchId is the program's id; when
+ * null the global bot is running and commands should omit
+ * the `?batchId=...` param (the backend falls back to the
+ * global default in that case).
+ */
+export interface BotRuntimeContext {
+  /** The bot config (clientId, adminUserIds, publicUrl, etc). */
+  config: BotConfig;
+  /** The program this bot is bound to. null for the legacy global bot. */
+  batchId: string | null;
+}
+
 export async function handleInteraction(
   interaction: Interaction,
-  config: BotConfig
+  ctx: BotConfig | BotRuntimeContext
 ): Promise<void> {
+  // v1.69 — Additive signature: legacy callers pass a
+  // bare BotConfig, new callers (botManager) pass a
+  // BotRuntimeContext with the batchId. Detect the shape
+  // and normalise.
+  const runtime: BotRuntimeContext = 'config' in ctx
+    ? ctx
+    : { config: ctx as BotConfig, batchId: null };
+
   // We only handle ChatInputCommand (slash) interactions. Other
   // interaction types (autocomplete, modal submit, button
   // click) aren't used yet.
@@ -29,14 +57,14 @@ export async function handleInteraction(
 
   try {
     switch (cmd.commandName) {
-      case 'ask':       return await executeAsk(cmd, config);
-      case 'search':    return await executeSearch(cmd, config);
-      case 'status':    return await executeStatus(cmd, config);
-      case 'help':      return await executeHelp(cmd, config);
-      case 'tickets':   return await executeTickets(cmd, config);
-      case 'resolve':   return await executeResolve(cmd, config);
-      case 'ban':       return await executeBan(cmd, config);
-      case 'broadcast': return await executeBroadcast(cmd, config);
+      case 'ask':       return await executeAsk(cmd, runtime.config, runtime.batchId);
+      case 'search':    return await executeSearch(cmd, runtime.config, runtime.batchId);
+      case 'status':    return await executeStatus(cmd, runtime.config, runtime.batchId);
+      case 'help':      return await executeHelp(cmd, runtime.config, runtime.batchId);
+      case 'tickets':   return await executeTickets(cmd, runtime.config, runtime.batchId);
+      case 'resolve':   return await executeResolve(cmd, runtime.config, runtime.batchId);
+      case 'ban':       return await executeBan(cmd, runtime.config, runtime.batchId);
+      case 'broadcast': return await executeBroadcast(cmd, runtime.config, runtime.batchId);
       default:
         await cmd.reply({
           embeds: [new EmbedBuilder()
@@ -64,7 +92,8 @@ export async function handleInteraction(
   }
 }
 
-export function isAdmin(interaction: ChatInputCommandInteraction, config: BotConfig): boolean {
+export function isAdmin(interaction: ChatInputCommandInteraction, ctx: BotConfig | BotRuntimeContext): boolean {
+  const config = 'config' in ctx ? ctx.config : ctx;
   if (config.adminUserIds.length === 0) return false;
   return config.adminUserIds.includes(interaction.user.id);
 }

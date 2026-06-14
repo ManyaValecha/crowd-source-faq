@@ -1,6 +1,7 @@
 import React, { type ReactNode, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import AdminSidebar from './AdminSidebar';
+import AdminActiveProgramIndicator from './AdminActiveProgramIndicator';
 import Navbar from '../../../components/layout/Navbar';
 import { useAdminAuth } from '../../hooks/useAdminAuth';
 // H2 fix (v1.68) — wrap the admin page slot in a section-level
@@ -35,6 +36,15 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       <Navbar />
       <AdminSidebar mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
       <div className="flex-1 flex flex-col min-w-0 lg:ml-56 relative">
+        {/* v1.69 — Phase 12: persistent active-program indicator
+            so the admin always knows which program their
+            per-program mutations are targeting. The dropdown
+            (inside the component) lets the admin switch the
+            active program in-place; the rest of the app reads
+            the new active batch from BatchContext. */}
+        <div className="px-5 lg:px-6 pt-5 pb-2 flex items-center justify-end border-b border-border/30 bg-bg/30">
+          <AdminActiveProgramIndicator />
+        </div>
         <div className="absolute top-0 left-0 p-4 lg:hidden z-10">
           <button onClick={() => setMobileOpen(v => !v)}
             className="w-8 h-8 flex items-center justify-center rounded-lg text-ink-faint hover:text-ink hover:bg-mist transition-colors">

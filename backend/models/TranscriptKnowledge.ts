@@ -46,6 +46,9 @@ export interface ITranscriptKnowledge extends Document {
   /** Keywords for keyword-based fallback matching */
   keywords: string[];
 
+  /** v1.69 — Program this knowledge entry belongs to. */
+  batchId?: Types.ObjectId | null;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -121,6 +124,15 @@ const transcriptKnowledgeSchema = new MongooseSchema<ITranscriptKnowledge>(
     embedding: {
       type: [Number],
       default: undefined,
+    },
+    // v1.69 — see interface. KB entries are program-scoped so the
+    // public /program/:slug page can show "knowledge from this
+    // program" without leaking content from past cohorts.
+    batchId: {
+      type: MongooseSchema.Types.ObjectId,
+      ref: 'Batch',
+      default: null,
+      index: true,
     },
   },
   { timestamps: true }

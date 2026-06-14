@@ -1,29 +1,32 @@
 /**
- * bot/commands/ask.ts — /ask <question>
+ * bot/commands/ask.ts — /ask
  *
- * Public. Calls POST {PUBLIC_URL}/api/ask-ai with the
- * question, returns the AI's answer as a Discord embed
- * with a citation footer showing which FAQs / knowledge
- * base entries the answer was sourced from.
+ * Public. Calls the backend /api/ask-ai endpoint and
+ * replies with the answer (and the matching FAQ sources).
+ *
+ * v1.69 — Phase 6+ per-guild → batchId routing. The
+ * (config, batchId) tuple lets each per-program bot hit
+ * the right program's data.
  */
 
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import type { BotConfig } from '../discordBot.js';
+import { buildBotApiUrl, botApiHeaders } from '../events/botApi.js';
 
 export const askCommandData = new SlashCommandBuilder()
   .setName('ask')
-  .setDescription('Ask the Yaksha knowledge base a question')
-  .addStringOption((o) =>
-    o.setName('question')
-      .setDescription('Your question in plain English')
-      .setRequired(true)
-      .setMaxLength(500)
-  )
+  .setDescription('Ask Yaksha a question and get an AI-generated answer from the FAQs.')
+  .addStringOption((o) => o.setName('question').setDescription('What do you want to ask?').setRequired(true))
   .toJSON();
+
+function errorEmbed(msg: string): EmbedBuilder {
+  return new EmbedBuilder().setColor(0xff6b6b).setTitle('Error').setDescription(msg.slice(0, 3500));
+}
 
 export async function executeAsk(
   interaction: ChatInputCommandInteraction,
-  config: BotConfig
+  config: BotConfig,
+  batchId: string | null = null
 ): Promise<void> {
   const question = interaction.options.getString('question', true);
   // Don't make Discord wait longer than ~10s. We set ephemeral
@@ -33,9 +36,9 @@ export async function executeAsk(
   let answer = '(no answer)';
   let sources: { title: string; source: string }[] = [];
   try {
-    const res = await fetch(`${config.publicUrl}/api/ask-ai`, {
+    const res = await fetch(buildBotApiUrl(config, '/api/ask-ai', batchId), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...botApiHeaders(config, batchId) },
       body: JSON.stringify({ query: question, topK: 3 }),
     });
     if (res.ok) {
@@ -63,18 +66,10 @@ export async function executeAsk(
     embed.addFields({
       name: 'Sources',
       value: sources
-        .slice(0, 5)
-        .map((s: { title: string; source: string }, i: number) => `${i + 1}. **${s.title.slice(0, 80)}** _(${s.source})_`)
+        .map((s) => `• ${s.title}`)
         .join('\n')
         .slice(0, 1024),
     });
   }
   await interaction.followUp({ embeds: [embed] });
-}
-
-function errorEmbed(msg: string): EmbedBuilder {
-  return new EmbedBuilder()
-    .setColor(0xff6b6b)
-    .setTitle('Error')
-    .setDescription(msg.slice(0, 1000));
 }

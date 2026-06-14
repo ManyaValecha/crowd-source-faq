@@ -54,6 +54,14 @@ export interface IContextField {
 // ─── Document ───────────────────────────────────────────────────────────────
 
 export interface ISupportCategory extends Document {
+  /**
+   * v1.69 — Phase 9: program scoping. null = global category
+   * available to every program; non-null = per-program override.
+   * When the migration runs, every existing category becomes
+   * a global default (batchId: null). New categories are
+   * created via the admin UI with a per-program batchId.
+   */
+  batchId: Types.ObjectId | null;
   /** Stable kebab-case key — e.g. 'internet', 'device', 'stipend-issue'. Unique. */
   issueType: string;
   label: string;
@@ -106,10 +114,17 @@ const fieldSubSchema = new MongooseSchema<IContextField>(
 
 const supportCategorySchema = new MongooseSchema<ISupportCategory>(
   {
+    // v1.69 — Phase 9: per-program scoping.
+    batchId: {
+      type: MongooseSchema.Types.ObjectId,
+      ref: 'Batch',
+      default: null,
+      index: true,
+    },
     issueType: {
       type: String,
       required: true,
-      unique: true,
+      unique: true, // legacy global uniqueness — Phase 9+ relies on (batchId, issueType)
       trim: true,
       lowercase: true,
       maxlength: 60,
@@ -132,10 +147,22 @@ const supportCategorySchema = new MongooseSchema<ISupportCategory>(
   { timestamps: true },
 );
 
-// Hot read paths
+// v1.69 — Phase 9: per-program uniqueness. A (batchId, issueType)
+// pair is unique; a null batchId represents the global default.
+// Allows a single kebab-case key to be reused across programs
+// when the meaning diverges (e.g. program A has a 'device' issue
+// type with different steps than program B).
+supportCategorySchema.index(
+  { batchId: 1, issueType: 1 },
+  { unique: true, partialFilterExpression: { issueType: { $type: 'string' } } }
+);
 
-// "Active categories, ordered for the picker" — every user load
-supportCategorySchema.index({ isActive: 1, displayOrder: 1 });
+// "Active categories for this program, ordered for the picker"
+// — the public listUsers endpoint uses this with the active
+// program's batchId. The (batchId, isActive, displayOrder)
+// index covers both the per-program picker and the fallback
+// global-list (when batchId=null).
+supportCategorySchema.index({ batchId: 1, isActive: 1, displayOrder: 1 });
 
 // "All categories, ordered" — admin schema editor
 supportCategorySchema.index({ displayOrder: 1 });

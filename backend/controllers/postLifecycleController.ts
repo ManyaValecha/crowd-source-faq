@@ -20,6 +20,8 @@ import { invalidateCache } from '../utils/http/cache.js';
 import { dispatchNotification } from '../utils/http/notificationDispatcher.js';
 import { createTeaDrop } from './teaNotificationController.js';
 import { sanitizeHtml } from '../utils/http/sanitize.js';
+// v1.69 — Phase 3e: program-scope guard for all lifecycle writes.
+import { assertSameProgram } from '../utils/db/scopedQuery.js';
 import { communityLog } from '../utils/http/logger.js';
 
 // POST /api/community/:id/resolve — Mark a community post as resolved (admin/mod only)
@@ -39,6 +41,7 @@ export const resolvePost = async (req: Request, res: Response): Promise<void> =>
       res.status(404).json({ message: 'Post not found.' });
       return;
     }
+    if (assertSameProgram(post, req.programContext, res)) return;
 
     post.status = 'answered';
     post.answer = sanitizeHtml(answer.trim());
@@ -129,6 +132,7 @@ export const requestExpertHelp = async (req: Request, res: Response): Promise<vo
       res.status(404).json({ message: 'Post not found.' });
       return;
     }
+    if (assertSameProgram(post, req.programContext, res)) return;
 
     if (post.status === 'answered') {
       res.status(400).json({ message: 'This post is already answered.' });
@@ -173,6 +177,7 @@ export const convertCommunityPostToFAQ = async (req: Request, res: Response): Pr
       res.status(404).json({ message: 'Post not found.' });
       return;
     }
+    if (assertSameProgram(post, req.programContext, res)) return;
 
     if (!post.answer || !post.answer.trim()) {
       res.status(400).json({ message: 'Post has no answer yet. Resolve it before converting to FAQ.' });
@@ -230,6 +235,7 @@ export const setPostDNA = async (req: Request, res: Response): Promise<void> => 
   try {
     const post = await CommunityPost.findById(req.params.id);
     if (!post) { res.status(404).json({ message: 'Post not found.' }); return; }
+    if (assertSameProgram(post, req.programContext, res)) return;
 
     // IDOR guard: only post author or admin/moderator can edit DNA
     const isAuthor = post.author.toString() === req.user._id.toString();
@@ -274,6 +280,7 @@ export const setPostTags = async (req: Request, res: Response): Promise<void> =>
   try {
     const post = await CommunityPost.findById(req.params.id);
     if (!post) { res.status(404).json({ message: 'Post not found.' }); return; }
+    if (assertSameProgram(post, req.programContext, res)) return;
 
     // IDOR guard: only post author or admin/moderator can edit tags
     const isAuthor = post.author.toString() === req.user._id.toString();

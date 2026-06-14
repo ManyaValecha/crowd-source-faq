@@ -28,19 +28,32 @@ import { adminLog } from '../utils/http/logger.js';
  * Passes the request so the redirect URI is built from the actual request host
  * (so it works behind ngrok / reverse proxies / different deploy URLs).
  */
-export function connectZoom(req: Request, res: Response): void {
+// v1.69 — Phase 5: connectZoom is now async so the
+// per-program Zoom OAuth URL build can resolve the program's
+// client_id (which lives in ProgramConfig.zoom and is
+// decrypted on the fly).
+export async function connectZoom(req: Request, res: Response): Promise<void> {
   const userId = req.user!._id.toString();
   if (!userId) {
     res.status(401).json({ message: 'Authentication required' });
     return;
   }
 
-  const authUrl = buildZoomAuthUrl(userId, {
+  // v1.69 — Phase 5: per-program Zoom OAuth. When the
+  // ?batchId=... query param is supplied, the auth URL is
+  // built with that program's Zoom app's client_id (resolved
+  // via getProgramZoomConfig). The OAuth state is signed
+  // with both the userId AND the batchId so the callback
+  // step can reuse the same batchId when exchanging the
+  // code for tokens.
+  const rawBatch = req.query.batchId;
+  const batchId = typeof rawBatch === 'string' && rawBatch.length > 0 ? rawBatch : null;
+  const authUrl = await buildZoomAuthUrl(userId, {
     headers: req.headers as Record<string, string | string[] | undefined>,
     protocol: req.protocol,
   });
-  adminLog.info(`[Zoom OAuth] User ${userId} initiated Zoom connect`);
-  res.json({ authUrl });
+  adminLog.info(`[Zoom OAuth] User ${userId} initiated Zoom connect for batch ${batchId ?? 'global'}`);
+  res.json({ authUrl, batchId });
 }
 
 // ─── Callback ────────────────────────────────────────────────────────────────
@@ -89,7 +102,13 @@ export async function callbackZoom(req: Request, res: Response): Promise<void> {
     // Exchange authorization code for tokens (protected by circuit breaker)
     let tokens: { access_token: string; refresh_token: string; expires_in: number };
     try {
-      tokens = await exchangeCodeForTokens(code);
+      // v1.69 — Phase 5: per-program token exchange. The
+      // batchId is read from the signed OAuth state (set
+      // during the connect step). Falls back to global when
+      // the state didn't carry one.
+      const rawBatch = req.query.batchId;
+      const batchId = typeof rawBatch === 'string' && rawBatch.length > 0 ? rawBatch : null;
+      tokens = await exchangeCodeForTokens(code, batchId);
     } catch (err) {
       if (err instanceof CircuitOpenError) {
         adminLog.warn(`[Zoom OAuth] Circuit breaker open for token exchange`);

@@ -13,17 +13,49 @@
  */
 
 import { Request, Response } from 'express';
+import { Types } from 'mongoose';
 import AiConfig, { type IAiConfig, type AIProviderType } from '../models/AiConfig.js';
 import { logAction } from './adminController.js';
 import { invalidateProviderCache } from '../utils/ai/aiProvider.js';
 
 // ─── GET /api/admin/ai/config ───────────────────────────────────────────────
 
-export const getAiConfig = async (_req: Request, res: Response): Promise<void> => {
-  try {
-    let config = await AiConfig.findOne({ isActive: true });
+// v1.69 — Phase 4: per-program AI config. The route reads
+// `?batchId=...` (or the body's batchId on writes). When
+// supplied, getAiConfig / updateAiConfig / resetAiUsage target
+// the per-program override doc; when absent, they target the
+// global default (the prior behaviour). The resolver chain in
+// aiProvider.ts is the runtime source of truth.
+function batchIdFromQueryOrBody(req: Request): string | null {
+  const q = req.query.batchId;
+  if (typeof q === 'string' && q.length > 0) return q;
+  const b = (req.body as { batchId?: string } | undefined)?.batchId;
+  if (typeof b === 'string' && b.length > 0) return b;
+  return null;
+}
 
-    if (!config) {
+function asObjectIdOrNull(id: string | null): Types.ObjectId | null {
+  if (!id) return null;
+  return Types.ObjectId.isValid(id) ? new Types.ObjectId(id) : null;
+}
+
+export const getAiConfig = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const batchIdRaw = batchIdFromQueryOrBody(req);
+    const batchIdObjectId = asObjectIdOrNull(batchIdRaw);
+
+    // v1.69 — Phase 4: when batchId is supplied, look for the
+    // per-program override doc. If none exists, return a
+    // placeholder 'no override for this program' response so the
+    // admin UI can show the "no per-program override, falling
+    // back to global" hint.
+    let config = batchIdObjectId
+      ? await AiConfig.findOne({ batchId: batchIdObjectId, isActive: true })
+      : await AiConfig.findOne({ batchId: null, isActive: true });
+
+    if (!config && !batchIdObjectId) {
+      // Bootstrap the global default on first read (backwards
+      // compat with the singleton setup).
       config = await AiConfig.create({
         activeProvider: 'anthropic',
         providers: {
@@ -42,11 +74,18 @@ export const getAiConfig = async (_req: Request, res: Response): Promise<void> =
         },
         usage: { totalRequests: 0, totalEstimatedCost: 0, lastResetAt: new Date() },
         isActive: true,
+        batchId: null,
       });
     }
 
     const activeProvider = await detectActiveProvider();
-    res.json({ ...config.publicView(), activeProvider });
+    res.json({
+      ...(config ? config.publicView() : { providers: {}, features: {} }),
+      activeProvider,
+      // The shape the admin UI needs to render the 'no per-program
+      // override' state.
+      ...(batchIdObjectId && !config ? { hasOverride: false, batchId: batchIdObjectId } : { hasOverride: !!config }),
+    });
   } catch (error) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -68,8 +107,45 @@ export const updateAiConfig = async (req: Request, res: Response): Promise<void>
       providers?: Partial<Record<AIProviderType, ProviderOverrideUpdate>>;
     };
 
-    const config = await AiConfig.findOne({ isActive: true });
-    if (!config) { res.status(404).json({ message: 'AI config not found.' }); return; }
+    // v1.69 — Phase 4: per-program override on writes. When
+    // batchId is in the body, find or create the per-program
+    // override doc (the partial unique index lets us create
+    // without deactivating the global default). When absent,
+    // target the global default as before.
+    const batchIdRaw = batchIdFromQueryOrBody(req);
+    const batchIdObjectId = asObjectIdOrNull(batchIdRaw);
+
+    const filter = batchIdObjectId
+      ? { batchId: batchIdObjectId, isActive: true }
+      : { batchId: null, isActive: true };
+
+    let config = await AiConfig.findOne(filter);
+    if (!config) {
+      // v1.69 — Phase 4: bootstrap a fresh per-program override
+      // when one doesn't exist yet. The pre-save hook deactivates
+      // any other active doc in the same (batchId) bucket, so
+      // the global default stays untouched.
+      config = await AiConfig.create({
+        activeProvider: 'anthropic',
+        providers: {
+          anthropic: { apiKeyCipher: '', baseURL: '', model: '' },
+          openai:    { apiKeyCipher: '', baseURL: '', model: '' },
+          xai:       { apiKeyCipher: '', baseURL: '', model: '' },
+          minimax:   { apiKeyCipher: '', baseURL: '', model: '' },
+          gemini:    { apiKeyCipher: '', baseURL: '', model: '' },
+          custom:    { apiKeyCipher: '', baseURL: '', model: '' },
+        },
+        features: {
+          duplicateDetection:  { enabled: true, model: 'claude-sonnet-4-20250514', temperature: 0.1, maxTokens: 1024 },
+          knowledgeExtraction: { enabled: true, model: 'claude-sonnet-4-20250514', temperature: 0.2, maxTokens: 2048 },
+          searchSummarization: { enabled: true, model: 'claude-sonnet-4-20250514', temperature: 0.3, maxTokens: 512 },
+          faqGeneration:       { enabled: true, model: 'claude-sonnet-4-20250514', temperature: 0.4, maxTokens: 1024 },
+        },
+        usage: { totalRequests: 0, totalEstimatedCost: 0, lastResetAt: new Date() },
+        isActive: true,
+        batchId: batchIdObjectId,
+      });
+    }
 
     if (activeProvider !== undefined) config.activeProvider = activeProvider;
     if (features !== undefined) config.features = { ...config.features, ...features } as IAiConfig['features'];

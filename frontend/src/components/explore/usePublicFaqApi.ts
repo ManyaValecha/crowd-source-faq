@@ -23,8 +23,11 @@ interface FetchState<T> {
  * Generic GET hook with cancel-on-unmount + lightweight in-memory caching.
  * The cache key includes the URL + params so different filter combinations
  * (including batchId) don't collide.
+ *
+ * v1.69 — exported so adjacent hooks (e.g. `useCourses`) can reuse
+ * the same caching / cancellation behaviour.
  */
-function usePublicGet<T>(url: string | null, params?: Record<string, unknown>): FetchState<T> {
+export function usePublicGet<T>(url: string | null, params?: Record<string, unknown>): FetchState<T> {
   const [state, setState] = useState<FetchState<T>>({ data: null, loading: !!url, error: null });
   const cacheRef = useRef<Map<string, T>>(usePublicGet.cache);
 
@@ -61,39 +64,41 @@ function usePublicGet<T>(url: string | null, params?: Record<string, unknown>): 
 usePublicGet.cache = new Map();
 
 /** Build a memoised params object that only changes when batchId/limit change. */
-function useBatchParams(batchId: string | null, extra?: Record<string, unknown>): Record<string, unknown> {
+function useBatchParams(batchId: string | null, courseId: string | null, extra?: Record<string, unknown>): Record<string, unknown> {
   return useMemo(() => {
     const p: Record<string, unknown> = {};
     if (batchId) p.batchId = batchId;
+    if (courseId) p.courseId = courseId;
     if (extra) Object.assign(p, extra);
     return p;
-  }, [batchId, JSON.stringify(extra ?? {})]);
+  }, [batchId, courseId, JSON.stringify(extra ?? {})]);
 }
 
-export function usePopularFaqs(batchId: string | null, limit = 5) {
-  const params = useBatchParams(batchId, { limit });
+export function usePopularFaqs(batchId: string | null, courseId: string | null | undefined, limit = 5) {
+  const params = useBatchParams(batchId, courseId ?? null, { limit });
   // Don't fetch until we have a batch — backend returns empty for unscoped
   return usePublicGet<PopularResponse>(batchId ? '/public/popular-faqs' : null, params);
 }
 
-export function useRecentFaqs(batchId: string | null, limit = 6) {
-  const params = useBatchParams(batchId, { limit });
+export function useRecentFaqs(batchId: string | null, courseId: string | null | undefined, limit = 6) {
+  const params = useBatchParams(batchId, courseId ?? null, { limit });
   return usePublicGet<RecentResponse>(batchId ? '/public/recent-faqs' : null, params);
 }
 
-export function useCategories(batchId: string | null, includeTop = false, topN = 3) {
+export function useCategories(batchId: string | null, courseId: string | null | undefined, includeTop = false, topN = 3) {
   const params = useBatchParams(
     batchId,
+    courseId ?? null,
     includeTop ? { withTop: topN } : undefined,
   );
   return usePublicGet<CategoriesResponse>(batchId ? '/public/categories' : null, params);
 }
 
-export function usePublicFaqSearch(batchId: string | null, query: string, category: string | null) {
+export function usePublicFaqSearch(batchId: string | null, courseId: string | null | undefined, query: string, category: string | null) {
   const params: Record<string, unknown> = { q: query };
   if (category) params.category = category;
   const enabled = !!batchId && query.length >= 2;
-  return usePublicGet<SearchResponse>(enabled ? '/public/search' : null, useBatchParams(batchId, params));
+  return usePublicGet<SearchResponse>(enabled ? '/public/search' : null, useBatchParams(batchId, courseId ?? null, params));
 }
 
 export function usePublicFaqById(id: string | null) {

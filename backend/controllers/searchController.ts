@@ -100,15 +100,20 @@ searchLogFlushActive.inc();
 }
 
 // Helper: Executes traditional MongoDB keyword search
-const runTextSearch = async (collectionName: string, queryStr: string, limit = 5): Promise<SearchResultItem[]> => {
+const runTextSearch = async (collectionName: string, queryStr: string, limit = 5, batchIdFilter: Types.ObjectId | null = null): Promise<SearchResultItem[]> => {
   try {
     const db = mongoose.connection.db;
     if (!db) return [];
     const collection = db.collection(collectionName);
-    
+
+    // v1.69 — Phase 3c: optionally pre-filter by batchId so the
+    // text index only matches the active program's documents.
+    const filter: Record<string, unknown> = { $text: { $search: queryStr } };
+    if (batchIdFilter) filter.batchId = batchIdFilter;
+
     // Find documents matching text index, sort by native textScore
     return await collection.find(
-      { $text: { $search: queryStr } },
+      filter,
       { projection: { score: { $meta: 'textScore' } } }
     )
     .sort({ score: { $meta: 'textScore' } })
@@ -122,13 +127,23 @@ const runTextSearch = async (collectionName: string, queryStr: string, limit = 5
 };
 
 // Helper: Executes MongoDB Atlas Vector Search (Semantic Search)
-const runVectorSearch = async (collectionName: string, queryEmbedding: number[], limit = 5): Promise<SearchResultItem[]> => {
+const runVectorSearch = async (collectionName: string, queryEmbedding: number[], limit = 5, batchIdFilter: Types.ObjectId | null = null): Promise<SearchResultItem[]> => {
   try {
     const db = mongoose.connection.db;
     if (!db) return [];
     const collection = db.collection(collectionName);
 
-    const pipeline = [
+    // v1.69 — Phase 3c: pre-filter by batchId BEFORE the
+    // $vectorSearch stage. Vector search has to be the first
+    // pipeline stage it touches, so a $match pre-filter is the
+    // only way to scope the search to a single program. When
+    // batchIdFilter is null the helper behaves as before.
+    const preFilter: Record<string, unknown>[] = batchIdFilter
+      ? [{ $match: { batchId: batchIdFilter } }]
+      : [];
+
+    const pipeline: Record<string, unknown>[] = [
+      ...preFilter,
       {
         $vectorSearch: {
           index: 'vector_index',
@@ -201,6 +216,15 @@ export const semanticSearch = async (req: Request, res: Response): Promise<void>
     const userObjectId = userId
       ? (typeof userId === 'string' ? new Types.ObjectId(userId) : userId)
       : null;
+    // v1.69 — Phase 3c: read the program context (attached by
+    // programScope middleware) so the vector + text searches only
+    // consider the active program's FAQs / posts. When the
+    // context is absent (e.g. admin global search, or single-tenant
+    // dev mode) the filter is a no-op.
+    const programContext = req.programContext;
+    const batchIdObjectId = programContext
+      ? new Types.ObjectId(programContext.batchId)
+      : null;
 
     if (!query) {
       res.status(400).json({ message: 'query string is required.' });
@@ -250,10 +274,10 @@ export const semanticSearch = async (req: Request, res: Response): Promise<void>
 
     // 3. Execute Vector and Text searches in parallel across both collections for maximum speed
     const [faqVec, commVec, faqTxt, commTxt] = await Promise.all([
-      runVectorSearch('yaksha_faq_faqs', embedding, 5),
-      runVectorSearch('yaksha_faq_communityposts', embedding, 5),
-      runTextSearch('yaksha_faq_faqs', query, 5),
-      runTextSearch('yaksha_faq_communityposts', query, 5)
+      runVectorSearch('yaksha_faq_faqs', embedding, 5, batchIdObjectId),
+      runVectorSearch('yaksha_faq_communityposts', embedding, 5, batchIdObjectId),
+      runTextSearch('yaksha_faq_faqs', query, 5, batchIdObjectId),
+      runTextSearch('yaksha_faq_communityposts', query, 5, batchIdObjectId)
     ]);
     
     // Tag results with their origin source (FAQ vs Community)

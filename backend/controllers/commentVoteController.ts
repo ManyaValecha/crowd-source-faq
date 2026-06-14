@@ -15,9 +15,14 @@ import { Types } from 'mongoose';
 import CommunityPost from '../models/CommunityPost.js';
 import User, { calculateTier } from '../models/User.js';
 import ReputationLog from '../models/ReputationLog.js';
+// v1.69 — Phase 7: per-program reputation writes (dual write
+// with the User global aggregate).
+import { awardToUser } from '../models/ProgramReputation.js';
 import { autoAwardBadges } from './reputationController.js';
 import { createTeaDrop } from './teaNotificationController.js';
 import { communityLog } from '../utils/http/logger.js';
+// v1.69 — Phase 3e: program-scope guard for comment votes.
+import { assertSameProgram } from '../utils/db/scopedQuery.js';
 
 // ─── toggleCommentUpvote ───────────────────────────────────────────────────────
 // POST /api/community/:id/comments/:commentId/upvote
@@ -26,6 +31,7 @@ export const toggleCommentUpvote = async (req: Request, res: Response): Promise<
   try {
     const post = await CommunityPost.findById(req.params.id);
     if (!post) { res.status(404).json({ message: 'Post not found.' }); return; }
+    if (assertSameProgram(post, req.programContext, res)) return;
 
     const comment = (post.comments as any).id(req.params.commentId);
     if (!comment) { res.status(404).json({ message: 'Comment not found.' }); return; }
@@ -41,6 +47,9 @@ export const toggleCommentUpvote = async (req: Request, res: Response): Promise<
     // Reverse reputation when removing upvote
     if (!isSelfVote && alreadyUpvoted) {
       await User.findByIdAndUpdate(commentAuthorId, { $inc: { points: -5, reputation: -5 } });
+      // v1.69 — Phase 7: per-program reversal.
+      await awardToUser(commentAuthorId.toString(), post.batchId as Types.ObjectId, { points: -5 })
+        .catch((err) => communityLog.warn(`[commentVote] ProgramReputation reverse failed: ${(err as Error).message}`));
       await ReputationLog.deleteMany({
         userId: commentAuthorId,
         targetId: post._id as Types.ObjectId,
@@ -100,8 +109,12 @@ export const toggleCommentUpvote = async (req: Request, res: Response): Promise<
         autoAwardBadges(commentAuthorId.toString()).catch((err) => {
           communityLog.warn(`[commentVote] Failed to auto-award badges to ${commentAuthorId}: ${(err as Error).message}`);
         });
+        // v1.69 — Phase 7: per-program reputation write.
+        await awardToUser(commentAuthorId.toString(), post.batchId as Types.ObjectId, { points: 5 })
+          .catch((err) => communityLog.warn(`[commentVote] ProgramReputation write failed: ${(err as Error).message}`));
         await ReputationLog.create({
           userId: commentAuthorId,
+          batchId: post.batchId ?? null,
           delta: 5,
           reason: `Answer upvote received on post "${post.title.slice(0, 40)}"`,
           action: 'upvote_received',
@@ -129,6 +142,7 @@ export const toggleCommentDownvote = async (req: Request, res: Response): Promis
   try {
     const post = await CommunityPost.findById(req.params.id as string);
     if (!post) { res.status(404).json({ message: 'Post not found.' }); return; }
+    if (assertSameProgram(post, req.programContext, res)) return;
 
     const comment = (post.comments as any).id(req.params.commentId);
     if (!comment) { res.status(404).json({ message: 'Comment not found.' }); return; }

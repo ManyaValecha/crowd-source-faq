@@ -11,6 +11,12 @@ export interface IBadge extends Document {
   type: BadgeType;
   pointsRequired?: number;
   actionTrigger: BadgeTrigger;
+  /**
+   * v1.69 — null = badge is global (e.g. "first answer"). Non-null =
+   * badge is awarded only within a specific program run.
+   * Admin UI lets the user flip this from /admin/badges.
+   */
+  batchId?: MongooseSchema.Types.ObjectId | null;
   active: boolean;
   createdAt: Date;
 }
@@ -45,6 +51,15 @@ const badgeSchema = new MongooseSchema<IBadge>({
   type: { type: String, enum: ['positive', 'negative'] as BadgeType[], required: true },
   pointsRequired: { type: Number },
   actionTrigger: { type: String, enum: ['auto', 'manual'] as BadgeTrigger[], default: 'manual' },
+  // v1.69 — see interface. Index covers "all badges for program X"
+  // and lets us do a partial unique index on global badge slugs
+  // (null) vs per-program badge slugs (specific batchId).
+  batchId: {
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Batch',
+    default: null,
+    index: true,
+  },
   active: { type: Boolean, default: true },
 }, { timestamps: true });
 

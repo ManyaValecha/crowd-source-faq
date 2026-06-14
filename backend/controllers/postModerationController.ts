@@ -16,6 +16,8 @@ import CommunityPost from '../models/CommunityPost.js';
 import User, { calculateTier } from '../models/User.js';
 import ReputationLog from '../models/ReputationLog.js';
 import { adminLog } from '../utils/http/logger.js';
+// v1.69 — Phase 3e: program-scope guard for all moderation writes.
+import { assertSameProgram } from '../utils/db/scopedQuery.js';
 
 // POST /api/community/:id/object-to-promotion — Moderator blocks promotion of a post
 export const objectToPromotion = async (req: Request, res: Response): Promise<void> => {
@@ -26,6 +28,7 @@ export const objectToPromotion = async (req: Request, res: Response): Promise<vo
 
     const post = await CommunityPost.findById(req.params.id);
     if (!post) { res.status(404).json({ message: 'Post not found.' }); return; }
+    if (assertSameProgram(post, req.programContext, res)) return;
 
     post.promotionObjectedBy = req.user._id;
     post.promotionObjectedAt = new Date();
@@ -48,6 +51,7 @@ export const confirmSpam = async (req: Request, res: Response): Promise<void> =>
   try {
     const post = await CommunityPost.findById(req.params.id);
     if (!post) { res.status(404).json({ message: 'Post not found.' }); return; }
+    if (assertSameProgram(post, req.programContext, res)) return;
 
     const offenderId = post.author?.toString();
     if (offenderId) {
@@ -100,6 +104,7 @@ export const hidePost = async (req: Request, res: Response): Promise<void> => {
     const { reason } = req.body as { reason?: string };
     const post = await CommunityPost.findById(req.params.id);
     if (!post) { res.status(404).json({ message: 'Post not found.' }); return; }
+    if (assertSameProgram(post, req.programContext, res)) return;
     post.isHidden = true;
     post.hiddenAt = new Date();
     post.hiddenBy = req.user._id;
@@ -124,6 +129,7 @@ export const unhidePost = async (req: Request, res: Response): Promise<void> => 
   try {
     const post = await CommunityPost.findById(req.params.id);
     if (!post) { res.status(404).json({ message: 'Post not found.' }); return; }
+    if (assertSameProgram(post, req.programContext, res)) return;
     post.isHidden = false;
     post.hiddenAt = null;
     post.hiddenBy = null;
@@ -143,6 +149,7 @@ export const lockPost = async (req: Request, res: Response): Promise<void> => {
     const { reason } = req.body as { reason?: string };
     const post = await CommunityPost.findById(req.params.id);
     if (!post) { res.status(404).json({ message: 'Post not found.' }); return; }
+    if (assertSameProgram(post, req.programContext, res)) return;
     post.isLocked = true;
     post.lockedAt = new Date();
     post.lockedBy = req.user._id;
@@ -167,6 +174,7 @@ export const unlockPost = async (req: Request, res: Response): Promise<void> => 
   try {
     const post = await CommunityPost.findById(req.params.id);
     if (!post) { res.status(404).json({ message: 'Post not found.' }); return; }
+    if (assertSameProgram(post, req.programContext, res)) return;
     post.isLocked = false;
     post.lockedAt = null;
     post.lockedBy = null;

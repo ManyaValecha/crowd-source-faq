@@ -22,6 +22,8 @@ export interface INotification extends Document {
   message: string;
   link: string;          // URL to navigate to when clicked
   read: boolean;
+  /** v1.69 — Program context (the event source). Mostly for analytics. */
+  batchId?: Types.ObjectId | null;
   createdAt: Date;
 }
 
@@ -65,6 +67,15 @@ const notificationSchema = new MongooseSchema(
     read: {
       type: Boolean,
       default: false,
+      index: true,
+    },
+    // v1.69 — carry the source program on the notification for
+    // cohort-aware analytics. The notification itself is still
+    // routed to the user via `recipient`.
+    batchId: {
+      type: MongooseSchema.Types.ObjectId,
+      ref: 'Batch',
+      default: null,
       index: true,
     },
   },

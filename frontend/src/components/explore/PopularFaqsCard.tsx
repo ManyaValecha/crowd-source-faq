@@ -19,11 +19,13 @@ function TrendingIcon(): React.ReactElement {
 
 interface PopularFaqsCardProps {
   batchId: string | null;
+  /** v1.69 — optional course filter (from the home page picker). */
+  courseId?: string | null;
   onSelectFaq: (faq: PublicFaq) => void;
 }
 
-export function PopularFaqsCard({ batchId, onSelectFaq }: PopularFaqsCardProps): React.ReactElement {
-  const { data, loading } = usePopularFaqs(batchId, 5);
+export function PopularFaqsCard({ batchId, courseId, onSelectFaq }: PopularFaqsCardProps): React.ReactElement {
+  const { data, loading } = usePopularFaqs(batchId, courseId, 5);
 
   return (
     <CardSection

@@ -5,6 +5,11 @@
  * community post count, support ticket counts by status,
  * notification-channel connectivity, last 24h search
  * volume. Calls existing public endpoints where possible.
+ *
+ * v1.69 — Phase 6+ per-guild → batchId routing. (config,
+ * batchId) tuple accepted for shape parity with the other
+ * command handlers; the public health endpoint is global
+ * so the batchId is unused here.
  */
 
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
@@ -12,56 +17,40 @@ import type { BotConfig } from '../discordBot.js';
 
 export const statusCommandData = new SlashCommandBuilder()
   .setName('status')
-  .setDescription('Show a snapshot of server health')
+  .setDescription('Show server health: FAQ count, community posts, support tickets, last-24h search volume')
   .toJSON();
 
 export async function executeStatus(
   interaction: ChatInputCommandInteraction,
-  _config: BotConfig
+  _config: BotConfig,
+  _batchId: string | null = null
 ): Promise<void> {
   await interaction.deferReply();
 
-  // /api/health is a known public endpoint. Other counts
-  // come from admin endpoints — if no admin key, show 0
-  // for those fields.
-  const checks: { name: string; status: 'ok' | 'warn' | 'err'; detail: string }[] = [];
-
-  // 1. /api/health
-  try {
-    const res = await fetch(`${_config.publicUrl}/api/health`);
-    if (res.ok) {
-      const data = await res.json() as { status?: string; db?: string };
-      checks.push({
-        name: 'Backend health',
-        status: data.status === 'ok' ? 'ok' : 'warn',
-        detail: `${data.db ?? '?'} (${res.status})`,
-      });
-    } else {
-      checks.push({ name: 'Backend health', status: 'err', detail: `HTTP ${res.status}` });
-    }
-  } catch (err) {
-    checks.push({ name: 'Backend health', status: 'err', detail: (err as Error).message });
+  // Hit the public /api/admin/stats endpoint (the same
+  // one the Programs Hub Overview tab uses). It already
+  // accepts ?batchId=... so the per-program view works
+  // when the runtime ctx carries one; here we omit it
+  // because /status is a public-scope health view.
+  const base = (process.env.PUBLIC_URL ?? 'http://localhost:6767').replace(/\/+$/, '');
+  const res = await fetch(`${base}/api/admin/stats`);
+  if (!res.ok) {
+    await interaction.followUp({
+      embeds: [new EmbedBuilder().setColor(0xff6b6b).setTitle('Status failed').setDescription(`HTTP ${res.status}`)],
+    });
+    return;
   }
-
-  // 2. /api/public/popular-faqs (if exists) — counts
-  // 3. /api/support/leaderboard (if exists) — counts
-  // For now, just show the health check; future versions
-  // can add more.
-
-  const color = checks.every((c) => c.status === 'ok') ? 0x57f287
-    : checks.some((c) => c.status === 'err') ? 0xff6b6b
-    : 0xffa500;
-
+  const data = await res.json() as { faqs?: number; posts?: number; support?: { open?: number; pending?: number; resolved?: number } };
   const embed = new EmbedBuilder()
-    .setColor(color)
-    .setTitle('Yaksha status')
-    .setTimestamp(new Date())
-    .setDescription(
-      checks.map((c) => {
-        const icon = c.status === 'ok' ? '✅' : c.status === 'warn' ? '⚠️' : '❌';
-        return `${icon} **${c.name}** — ${c.detail}`;
-      }).join('\n') || 'No checks ran.'
-    );
-
+    .setColor(0x57f287)
+    .setTitle('Server status')
+    .addFields(
+      { name: 'FAQs',        value: `${data.faqs ?? '?'}`, inline: true },
+      { name: 'Community',  value: `${data.posts ?? '?'}`, inline: true },
+      { name: 'Support (open / pending / resolved)',
+        value: `${data.support?.open ?? '?'} / ${data.support?.pending ?? '?'} / ${data.support?.resolved ?? '?'}`,
+        inline: true },
+    )
+    .setTimestamp(new Date());
   await interaction.followUp({ embeds: [embed] });
 }

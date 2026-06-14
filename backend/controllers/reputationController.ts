@@ -1,7 +1,12 @@
 import { Request, Response } from 'express';
+import { Types } from 'mongoose';
 import User, { calculateTier } from '../models/User.js';
 import ReputationLog from '../models/ReputationLog.js';
 import Badge from '../models/Badge.js';
+// v1.69 — Phase 7 prep: when the leaderboard is scoped to a
+// program, the source of truth is the per-user-per-program
+// ProgramReputation doc, not the global User.points field.
+import ProgramReputation, { awardToUser } from '../models/ProgramReputation.js';
 import { adminLog } from '../utils/http/logger.js';
 
 // ─── Auto Badge Awarder ─────────────────────────────────────────────────────
@@ -53,9 +58,26 @@ export const awardPoints = async (req: Request, res: Response): Promise<void> =>
     return;
   }
   try {
-    const { userId, delta, reason, action, targetId, targetType } = req.body;
+    // v1.69 — Phase 7: admin award points is now batchId-scoped.
+    // The body's batchId drives where the per-program write lands.
+    // When null, only the User global aggregate is updated (admin
+    // is awarding cross-program 'reputation' that doesn't belong
+    // to any one program).
+    const { userId, delta, reason, action, targetId, targetType, batchId: rawBatchId } = req.body as {
+      userId?: string;
+      delta?: number;
+      reason?: string;
+      action?: string;
+      targetId?: string;
+      targetType?: string;
+      batchId?: string;
+    };
     if (!userId || delta === undefined || !reason) {
       res.status(400).json({ message: 'userId, delta, and reason are required' });
+      return;
+    }
+    if (!Types.ObjectId.isValid(userId)) {
+      res.status(400).json({ message: 'Invalid userId.' });
       return;
     }
 
@@ -70,16 +92,27 @@ export const awardPoints = async (req: Request, res: Response): Promise<void> =>
 
     await user.save();
 
+    // v1.69 — Phase 7: per-program write when a program is
+    // specified. Dual-write with the global User aggregate.
+    const batchIdValid = rawBatchId && Types.ObjectId.isValid(rawBatchId)
+      ? new Types.ObjectId(rawBatchId)
+      : null;
+    if (batchIdValid && delta !== 0) {
+      await awardToUser(userId, batchIdValid, { points: delta })
+        .catch((err) => adminLog.warn(`[reputation] awardToUser failed for ${userId}: ${(err as Error).message}`));
+    }
+
     await ReputationLog.create({
       userId, delta, reason,
       action: action || (delta > 0 ? 'admin_point_award' : 'admin_point_deduct'),
       targetId, targetType,
+      batchId: batchIdValid,
       awardedBy: (req as any).user?.id,
     });
 
     res.json({
       userId, points: user.points, reputation: user.reputation, tier: user.tier,
-      prevPoints, prevTier, delta,
+      prevPoints, prevTier, delta, batchId: batchIdValid,
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', /* error: process.env.NODE_ENV === 'development' ? (error as Error).message : undefined */ });
@@ -205,6 +238,51 @@ export const getLeaderboard = async (req: Request, res: Response): Promise<void>
   try {
     const limit = Math.min(parseInt(String(req.query.limit ?? '10')), 50);
     const period = String(req.query.period ?? 'all'); // 'weekly' | 'monthly' | 'all'
+    // v1.69 — Phase 3i: per-program leaderboard. When ?batchId=
+    // is supplied, switch from the global User.points/ReputationLog
+    // to the per-user-per-program ProgramReputation doc. Time
+    // windows collapse to 'all' inside the per-program branch
+    // (we don't aggregate per-period from ProgramReputation yet —
+    // Phase 7 will).
+    const rawBatchId = req.query.batchId;
+    const batchId = typeof rawBatchId === 'string' && Types.ObjectId.isValid(rawBatchId)
+      ? new Types.ObjectId(rawBatchId)
+      : null;
+    if (batchId) {
+      const perProgramRows = await ProgramReputation.find({ batchId })
+        .sort({ points: -1 })
+        .limit(limit)
+        .populate('userId', 'name tier createdAt positiveBadges acceptedAnswers faqContributions')
+        .lean();
+      const rank = perProgramRows
+        // v1.69 — Phase 3i: cast the populated userId to
+        // { isDeleted, isBanned, name, ... } so tsc can read
+        // the User fields after the .populate(). Without the
+        // cast, tsc only sees the bare ObjectId.
+        .filter((r) => {
+          const u = r.userId as unknown as { isDeleted?: boolean; isBanned?: boolean } | null;
+          return u && !u.isDeleted && !u.isBanned;
+        })
+        .map((r, i) => {
+          const u = r.userId as { name?: string; tier?: string; createdAt?: Date; positiveBadges?: unknown[]; acceptedAnswers?: number; faqContributions?: number };
+          return {
+            rank: i + 1,
+            userId: r.userId._id,
+            name: u.name,
+            points: r.points,
+            sp: r.sp,
+            tier: r.tier,
+            badges: Array.isArray(u.positiveBadges) ? u.positiveBadges.length : 0,
+            acceptedAnswers: u.acceptedAnswers ?? 0,
+            faqContributions: u.faqContributions ?? 0,
+            joinedAt: u.createdAt,
+            scope: 'program' as const,
+            batchId: r.batchId,
+          };
+        });
+      res.json({ leaderboard: rank, total: rank.length, period: 'all', sort: 'points', scope: 'program' });
+      return;
+    }
     // v1.65 — Spurti Points leaderboard. `?sort=sp` re-ranks the same
     // eligible users by `sp` desc instead of by `points` desc. The
     // response shape stays the same so the frontend can render either

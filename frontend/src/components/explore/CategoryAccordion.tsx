@@ -13,6 +13,8 @@ import { CardSkeleton, EmptyState } from './ExploreSkeleton';
 interface CategoryAccordionProps {
   category: PublicCategory;
   batchId: string | null;
+  /** v1.69 — optional course filter (from the home page picker). */
+  courseId?: string | null;
   onSelectFaq: (faq: PublicFaq) => void;
   /** Ref to scroll to when targeted from the sidebar. */
   scrollAnchorRef?: React.RefObject<HTMLDivElement>;
@@ -25,6 +27,7 @@ interface CategoryAccordionProps {
 export function CategoryAccordion({
   category,
   batchId,
+  courseId,
   onSelectFaq,
   scrollAnchorRef,
   openOnMount = false,
@@ -36,7 +39,7 @@ export function CategoryAccordion({
   // Lazy-load the top FAQs only on first open (the categories endpoint
   // without ?withTop= doesn't return them — saves bandwidth on the
   // initial page load).
-  const { data, loading } = useCategories(open && !category.topFaqs ? batchId : null, true, 3);
+  const { data, loading } = useCategories(open && !category.topFaqs ? batchId : null, courseId ?? undefined, true, 3);
   const resolved: PublicCategory = category.topFaqs
     ? category
     : data?.categories.find((c) => c.name === category.name) ?? category;

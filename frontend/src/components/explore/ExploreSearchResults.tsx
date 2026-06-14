@@ -11,6 +11,8 @@ interface ExploreSearchResultsProps {
   query: string;
   category: string | null;
   batchId: string | null;
+  /** v1.69 — optional course filter (from the home page picker). */
+  courseId?: string | null;
   onSelectFaq: (faq: PublicFaq) => void;
   onClear: () => void;
 }
@@ -19,10 +21,11 @@ export function ExploreSearchResults({
   query,
   category,
   batchId,
+  courseId,
   onSelectFaq,
   onClear,
 }: ExploreSearchResultsProps): React.ReactElement | null {
-  const { data, loading, error } = usePublicFaqSearch(batchId, query, category);
+  const { data, loading, error } = usePublicFaqSearch(batchId, courseId, query, category);
 
   if (query.length < 2) return null;
 

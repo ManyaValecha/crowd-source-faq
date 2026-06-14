@@ -18,6 +18,7 @@
  */
 
 import { Request, Response } from 'express';
+import { Types } from 'mongoose';
 import SupportCategory, {
   SUPPORT_FIELD_TYPES,
   SUPPORT_ICON_KEYS,
@@ -31,6 +32,16 @@ import { getAuthedUserId } from './supportCore.js';
 function asStringParam(v: string | string[] | undefined): string | undefined {
   if (Array.isArray(v)) return v[0];
   return v;
+}
+
+// v1.69 — Phase 9: build a (batchId, issueType) lookup filter
+// for the per-program CRUD handlers. When batchId is null,
+// the filter targets the global default (batchId: null on
+// the doc).
+function batchIdValidFilter(issueType: string, batchId: Types.ObjectId | null): Record<string, unknown> {
+  return batchId
+    ? { issueType, batchId }
+    : { issueType, batchId: null };
 }
 
 function isKebabCase(value: string): boolean {
@@ -48,10 +59,41 @@ function kebabify(label: string): string {
 // ─── Category CRUD ────────────────────────────────────────────────────────
 
 /** GET /api/support/categories — list all categories (active first). */
-export async function listCategories(_req: Request, res: Response): Promise<void> {
+export async function listCategories(req: Request, res: Response): Promise<void> {
   try {
+    // v1.69 — Phase 9: when ?batchId=... is supplied, return
+    // only the per-program categories (issue types the
+    // program has overridden) + the global defaults merged.
+    // Without a batchId, the legacy global view is returned.
+    const rawBatch = req.query.batchId;
+    const batchId = typeof rawBatch === 'string' && Types.ObjectId.isValid(rawBatch)
+      ? new Types.ObjectId(rawBatch)
+      : null;
+    const filter: Record<string, unknown> = {};
+    if (batchId) {
+      // Per-program categories (with this batchId) + global
+      // defaults (with batchId:null). Admin-created overrides
+      // win on (issueType) collision.
+      const [perProgram, global] = await Promise.all([
+        SupportCategory.find({ batchId }).sort({ displayOrder: 1, createdAt: 1 }).lean(),
+        SupportCategory.find({ batchId: null }).sort({ displayOrder: 1, createdAt: 1 }).lean(),
+      ]);
+      // The picker UI shows a per-program override as its own
+      // card with a "Custom" badge. The admin UI uses
+      // ?includeOverrides=true to see both the global and the
+      // per-program view side by side.
+      if (req.query.includeOverrides === 'true') {
+        res.json({ categories: [...global, ...perProgram], source: 'merged' });
+        return;
+      }
+      const byIssueType = new Map<string, typeof perProgram[number]>();
+      for (const c of global) byIssueType.set(c.issueType, c);
+      for (const c of perProgram) byIssueType.set(c.issueType, c); // per-program wins
+      res.json({ categories: Array.from(byIssueType.values()), source: 'merged' });
+      return;
+    }
     const cats = await SupportCategory.find({}).sort({ displayOrder: 1, createdAt: 1 }).lean();
-    res.json({ categories: cats });
+    res.json({ categories: cats, source: 'global' });
   } catch (err) {
     supportLog.error(`[support] listCategories failed: ${(err as Error).message}`);
     res.status(500).json({ message: 'Failed to load categories.' });
@@ -85,6 +127,11 @@ export async function createCategory(req: Request, res: Response): Promise<void>
     iconKey?: string;
     steps?: string[];
     isActive?: boolean;
+    // v1.69 — Phase 9: per-program support categories. When
+    // batchId is supplied, the category is created as a
+    // per-program override; when null, the legacy global view
+    // is used (backwards compat for single-tenant installs).
+    batchId?: string;
   };
   const issueType = String(body.issueType || '').trim().toLowerCase();
   if (!isKebabCase(issueType)) {
@@ -100,14 +147,24 @@ export async function createCategory(req: Request, res: Response): Promise<void>
   const steps = Array.isArray(body.steps)
     ? body.steps.map((s) => String(s).trim()).filter(Boolean).slice(0, 20)
     : [];
+  const batchIdValid = body.batchId && Types.ObjectId.isValid(body.batchId)
+    ? new Types.ObjectId(body.batchId)
+    : null;
 
   const iconKey: SupportIconKey =
     SUPPORT_ICON_KEYS.includes(body.iconKey as SupportIconKey) ? (body.iconKey as SupportIconKey) : 'generic';
 
   try {
-    const exists = await SupportCategory.findOne({ issueType }).lean();
+    // v1.69 — Phase 9: uniqueness is now (batchId, issueType), not
+    // just issueType. The legacy `findOne({ issueType })` would
+    // collide if two programs wanted the same kebab-case key —
+    // we explicitly check (batchId, issueType) instead.
+    const exists = await SupportCategory.findOne({
+      issueType,
+      ...(batchIdValid ? { batchId: batchIdValid } : { batchId: null }),
+    }).lean();
     if (exists) {
-      res.status(409).json({ message: 'A category with this issueType already exists.' });
+      res.status(409).json({ message: 'A category with this issueType already exists in this program (or globally).' });
       return;
     }
     const max = await SupportCategory.findOne({}).sort({ displayOrder: -1 }).select('displayOrder').lean();
@@ -122,6 +179,10 @@ export async function createCategory(req: Request, res: Response): Promise<void>
       fields: [],
       isActive: body.isActive !== false,
       displayOrder,
+      // v1.69 — Phase 9: per-program override. When null,
+      // the category is the global default; when set, the
+      // category is only visible inside the named program.
+      batchId: batchIdValid,
       createdBy: userId,
     });
     res.status(201).json({ category: cat.toObject() });
@@ -137,11 +198,19 @@ export async function createCategory(req: Request, res: Response): Promise<void>
 }
 
 /** PATCH /api/support/categories/:issueType — update label / shortLabel /
- *  description / steps / iconKey / isActive / displayOrder. (Fields are
+ *  description / iconKey / steps / isActive / displayOrder. Field CRUD is
  *  managed via the field-specific endpoints below.) */
 export async function updateCategory(req: Request, res: Response): Promise<void> {
   const issueType = asStringParam(req.params.issueType);
   if (!issueType) { res.status(400).json({ message: 'Invalid issueType.' }); return; }
+  // v1.69 — Phase 9: per-program scope. When ?batchId=... is
+  // supplied, target the per-program override; otherwise the
+  // global default. The (batchId, issueType) pair is the
+  // unique lookup.
+  const rawBatch = req.query.batchId;
+  const batchId = typeof rawBatch === 'string' && Types.ObjectId.isValid(rawBatch)
+    ? new Types.ObjectId(rawBatch)
+    : null;
 
   const body = (req.body ?? {}) as {
     label?: string;
@@ -171,7 +240,9 @@ export async function updateCategory(req: Request, res: Response): Promise<void>
 
   try {
     const cat = await SupportCategory.findOneAndUpdate(
-      { issueType },
+      // v1.69 — Phase 9: (batchId, issueType) — see comment at
+      // the top of the function.
+      batchIdValidFilter(issueType, batchId),
       { $set: update },
       { new: true },
     ).lean();
@@ -189,8 +260,15 @@ export async function updateCategory(req: Request, res: Response): Promise<void>
 export async function deleteCategory(req: Request, res: Response): Promise<void> {
   const issueType = asStringParam(req.params.issueType);
   if (!issueType) { res.status(400).json({ message: 'Invalid issueType.' }); return; }
+  // v1.69 — Phase 9: per-program scope. Mirrors the update path.
+  const rawBatch = req.query.batchId;
+  const batchId = typeof rawBatch === 'string' && Types.ObjectId.isValid(rawBatch)
+    ? new Types.ObjectId(rawBatch)
+    : null;
   try {
-    const cat = await SupportCategory.findOneAndDelete({ issueType }).lean();
+    const cat = await SupportCategory.findOneAndDelete(
+      batchIdValidFilter(issueType, batchId)
+    ).lean();
     if (!cat) { res.status(404).json({ message: 'Category not found.' }); return; }
     res.json({ deleted: true });
   } catch (err) {

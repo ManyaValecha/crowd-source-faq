@@ -10,6 +10,10 @@ import { sanitizeHtml } from '../utils/http/sanitize.js';
 import { adminLog } from '../utils/http/logger.js';
 import FreshReviewVote from '../models/FreshReviewVote.js';
 import { generateEmbedding } from '../utils/ai/embeddings.js';
+// v1.69 — Phase 3i: admin dashboard reads accept an optional
+// ?batchId=... filter so an admin can scope a stats query to a
+// single program. Global view is still the default.
+import { withProgramScope } from '../utils/db/scopedQuery.js';
 
 export const logAction = async (
   adminId: string,
@@ -26,12 +30,13 @@ export const logAction = async (
 };
 
 // GET /api/admin/stats
-export const getStats = async (_req: Request, res: Response): Promise<void> => {
+export const getStats = async (req: Request, res: Response): Promise<void> => {
   try {
     const now = new Date();
     const todayStart = new Date(now.setHours(0, 0, 0, 0));
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+    const batchId = (req.query.batchId as string | undefined) ?? null;
 
     const [
       totalFaqs,
@@ -46,15 +51,16 @@ export const getStats = async (_req: Request, res: Response): Promise<void> => {
       usersThisWeek,
       topCategoryResult,
     ] = await Promise.all([
-      FAQ.countDocuments(),
-      FAQ.countDocuments({ status: 'pending' }),
-      FAQ.countDocuments({ status: 'approved' }),
-      FAQ.countDocuments({ status: 'rejected' }),
+      FAQ.countDocuments(withProgramScope({}, batchId)),
+      FAQ.countDocuments(withProgramScope({ status: 'pending' }, batchId)),
+      FAQ.countDocuments(withProgramScope({ status: 'approved' }, batchId)),
+      FAQ.countDocuments(withProgramScope({ status: 'rejected' }, batchId)),
+      // User collection is identity-scoped, not program-scoped.
       User.countDocuments(),
-      SearchLog.countDocuments({ createdAt: { $gte: todayStart } }),
-      SearchLog.countDocuments(),
-      FAQ.countDocuments({ createdAt: { $gte: weekAgo } }),
-      FAQ.countDocuments({ createdAt: { $gte: twoWeeksAgo, $lt: weekAgo } }),
+      SearchLog.countDocuments(withProgramScope({ createdAt: { $gte: todayStart } }, batchId)),
+      SearchLog.countDocuments(withProgramScope({}, batchId)),
+      FAQ.countDocuments(withProgramScope({ createdAt: { $gte: weekAgo } }, batchId)),
+      FAQ.countDocuments(withProgramScope({ createdAt: { $gte: twoWeeksAgo, $lt: weekAgo } }, batchId)),
       User.countDocuments({ createdAt: { $gte: weekAgo } }),
       FAQ.aggregate([
         { $group: { _id: '$category', count: { $sum: 1 } } },
@@ -63,9 +69,9 @@ export const getStats = async (_req: Request, res: Response): Promise<void> => {
       ]),
     ]);
 
-    const unanswered = await FAQ.countDocuments({
+    const unanswered = await FAQ.countDocuments(withProgramScope({
       $or: [{ status: 'pending' }, { answer: { $in: ['', null] } }],
-    });
+    }, batchId));
 
     const faqTrend =
       faqsLastWeek > 0
@@ -97,9 +103,10 @@ export const getFaqGrowth = async (req: Request, res: Response): Promise<void> =
   try {
     const days = parseInt(req.query.days as string) || 30;
     const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const batchId = (req.query.batchId as string | undefined) ?? null;
 
     const data = await FAQ.aggregate([
-      { $match: { createdAt: { $gte: from } } },
+      { $match: withProgramScope({ createdAt: { $gte: from } }, batchId) },
       {
         $group: {
           _id: {
@@ -127,13 +134,23 @@ export const getFaqGrowth = async (req: Request, res: Response): Promise<void> =
 };
 
 // GET /api/admin/top-categories
-export const getTopCategories = async (_req: Request, res: Response): Promise<void> => {
+export const getTopCategories = async (req: Request, res: Response): Promise<void> => {
   try {
-    const data = await FAQ.aggregate([
+    const batchId = (req.query.batchId as string | undefined) ?? null;
+    const pipeline: Record<string, unknown>[] = batchId
+      ? [{ $match: { batchId: new Types.ObjectId(batchId) } }]
+      : [];
+    pipeline.push(
       { $group: { _id: '$category', count: { $sum: 1 }, views: { $sum: '$views' } } },
       { $sort: { count: -1 } },
       { $limit: 10 },
-    ]);
+    );
+
+    // v1.69 — PipelineStage cast — the pipeline is built
+    // dynamically (a \$match pre-stage when batchId is set)
+    // and TypeScript can't narrow the array element type
+    // through the spread. The runtime shape is correct.
+    const data = await FAQ.aggregate(pipeline as unknown as Parameters<typeof FAQ.aggregate>[0]);
 
     res.json(data.map((d) => ({ name: d._id, count: d.count, views: d.views })));
   } catch (error) {
@@ -513,15 +530,17 @@ export const getCommunityPosts = async (req: Request, res: Response): Promise<vo
     const skip = (page - 1) * limit;
     const search = (req.query.search as string) || '';
     const status = (req.query.status as string) || '';
+    const batchId = (req.query.batchId as string | undefined) ?? null;
 
-    const query: Record<string, unknown> = {};
+    const base: Record<string, unknown> = {};
     if (search) {
-      query.$or = [
+      base.$or = [
         { title: { $regex: search, $options: 'i' } },
         { body: { $regex: search, $options: 'i' } },
       ];
     }
-    if (status) query.status = status;
+    if (status) base.status = status;
+    const query = withProgramScope(base, batchId);
 
     const [posts, total] = await Promise.all([
       CommunityPost.find(query)

@@ -1,21 +1,33 @@
 /**
  * AiConfig Model
  *
- * Stores the AI configuration for the application.
- * Only ONE active config document should exist at any time.
- * Admin-only access via the AI Settings page.
+ * v1.69 — Phase 4: per-program AI configuration.
  *
- * This replaces the ad-hoc provider detection in duplicateDetector.ts
- * and knowledgeBase.ts with a unified, admin-configurable AI layer.
+ * A single `batchId: null` doc is the global default. Each program
+ * can additionally have its own `batchId: <programId>` doc that
+ * overrides the global one (model selection, API key, features).
  *
- * Per-provider API keys and base URLs can be set:
- *   - by the admin via the dashboard (stored encrypted in this document), or
- *   - via env vars (used as fallback if the dashboard value is empty)
+ * Resolution order (utils/ai/aiProvider.ts → resolveActiveAiConfig):
+ *   1. (batchId, isActive:true) — per-program override
+ *   2. (batchId:null, isActive:true) — global default
+ *   3. empty defaults — used as the last resort when nothing is
+ *      configured anywhere
  *
- * The runtime resolver (utils/aiProvider.ts) checks the DB first, then env.
+ * The existing "only one active config at a time" invariant is
+ * preserved PER batchId: at most one active doc per (batchId)
+ * combination. The pre-save hook deactivates other docs in the
+ * same (batchId) bucket on save rather than globally.
+ *
+ * The admin dashboard's AI Settings page now uses batchId from
+ * the program selector to decide which config to edit.
+ *
+ * v1.66 — admin-only access. Replaces the ad-hoc provider
+ * detection in duplicateDetector.ts and knowledgeBase.ts with a
+ * unified, admin-configurable AI layer. The runtime resolver
+ * (utils/aiProvider.ts) checks the DB first, then env.
  */
 
-import mongoose, { Schema, type Document } from 'mongoose';
+import mongoose, { Schema, type Document, Types } from 'mongoose';
 import { encrypt, decrypt } from '../utils/auth/crypto.js';
 import { logger } from '../utils/http/logger.js';
 
@@ -31,6 +43,11 @@ export interface IProviderOverride {
 }
 
 export interface IAiConfig extends Document {
+  // v1.69 — Phase 4: null = global default, non-null = per-program
+  // override. The unique partial index below enforces at most one
+  // active doc per (batchId, isActive:true) combination.
+  batchId: Types.ObjectId | null;
+
   // Which provider is currently active
   activeProvider: AIProviderType;
 
@@ -78,6 +95,13 @@ const providerOverrideSchema = new Schema<IProviderOverride>(
 
 const aiConfigSchema = new Schema<IAiConfig>(
   {
+    // v1.69 — Phase 4: per-program override scoping. null = global.
+    batchId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Batch',
+      default: null,
+      index: true,
+    },
     activeProvider: {
       type: String,
       enum: ['anthropic', 'openai', 'xai', 'minimax', 'gemini', 'custom'] as AIProviderType[],
@@ -127,15 +151,31 @@ const aiConfigSchema = new Schema<IAiConfig>(
   { timestamps: { updatedAt: true } }
 );
 
-// Only one active config at a time
+// v1.69 — Phase 4: invariant is "at most one active per (batchId)".
+// When this doc is saved with isActive:true, deactivate any other
+// active docs in the SAME (batchId) bucket (either null or this
+// doc's batchId), but NOT docs in other buckets.
 aiConfigSchema.pre('save', function (next) {
   if (this.isActive) {
-    AiConfig.updateMany({ _id: { $ne: this._id } }, { isActive: false }).catch((err) => {
-      logger.warn(`[AiConfig] Failed to deactivate other configurations on pre-save: ${(err as Error).message}`);
+    const self = this as unknown as IAiConfig;
+    const bucket: Record<string, unknown> = { _id: { $ne: self._id }, isActive: true };
+    if (self.batchId) bucket.batchId = self.batchId;
+    else bucket.batchId = null;
+    AiConfig.updateMany(bucket, { isActive: false }).catch((err) => {
+      logger.warn(`[AiConfig] Failed to deactivate other configs in same bucket: ${(err as Error).message}`);
     });
   }
   next();
 });
+
+// v1.69 — Phase 4: partial unique index. There can be at most
+// one doc per (batchId, isActive:true) pair. The partial filter
+// means (batchId:null, isActive:false) docs are not constrained,
+// so historical inactive configs are kept for audit.
+aiConfigSchema.index(
+  { batchId: 1 },
+  { unique: true, partialFilterExpression: { isActive: true } }
+);
 
 // ── Method implementations ─────────────────────────────────────────────────
 

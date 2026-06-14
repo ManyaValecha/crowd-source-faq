@@ -24,7 +24,7 @@ const NAV: NavGroup[] = [
     items: [
       { to: '/admin/faqs',           label: 'FAQs',          icon: DocIcon },
       { to: '/admin/welcome',        label: 'Welcome',       icon: SparkleIcon },
-      { to: '/admin/batches',        label: 'Programs',      icon: LayersIcon },
+      { to: '/admin/programs',       label: 'Programs Hub',    icon: LayersIcon },
       { to: '/admin/faqs/review',    label: 'FAQ Review',    icon: ShieldCheckIcon },
       { to: '/admin/auto-answer',    label: 'AI Answers',    icon: SparkleIcon },
       { to: '/admin/faq-audit',     label: 'FAQ Audit',     icon: StethoscopeIcon },

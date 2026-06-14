@@ -61,6 +61,8 @@ export interface IZoomInsight extends Document {
 
 export interface IZoomMeeting extends Document {
   userId: Types.ObjectId;
+  /** v1.69 — Program this recording belongs to. */
+  batchId?: Types.ObjectId | null;
   zoomMeetingId: string; // Zoom's ID; 'manual-{timestamp}' for uploads
   topic: string;
   startTime: Date;
@@ -182,6 +184,14 @@ const zoomMeetingSchema = new MongooseSchema<IZoomMeeting>(
     zoomMeetingId: {
       type: String,
       required: true,
+    },
+    // v1.69 — see interface.
+    batchId: {
+      type: MongooseSchema.Types.ObjectId,
+      ref: 'Batch',
+      required: false,
+      index: true,
+      default: null,
     },
     topic: {
       type: String,

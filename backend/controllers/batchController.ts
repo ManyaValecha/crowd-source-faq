@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { Types } from 'mongoose';
-import Batch from '../models/Batch.js';
+import Batch, { slugifyProgramName } from '../models/Batch.js';
 import FAQ from '../models/FAQ.js';
 import { httpLog } from '../utils/http/logger.js';
 import { z } from 'zod';
@@ -29,6 +29,7 @@ export async function listPublicBatches(_req: Request, res: Response): Promise<v
       startDate: Date;
       endDate: Date;
       isActive: boolean;
+      isDefault: boolean;
       faqCount: number;
     }>([
       { $match: { isActive: true } },
@@ -53,6 +54,9 @@ export async function listPublicBatches(_req: Request, res: Response): Promise<v
         startDate: b.startDate,
         endDate: b.endDate,
         isActive: b.isActive,
+        // v1.69 — public callers need isDefault so the portal
+        // can hide non-default programs from visitors.
+        isDefault: b.isDefault,
         faqCount: b.faqCount,
       })),
     });
@@ -73,6 +77,7 @@ export async function listAdminBatches(_req: Request, res: Response): Promise<vo
       startDate: Date;
       endDate: Date;
       isActive: boolean;
+      isDefault: boolean;
       faqCount: number;
       createdAt: Date;
       updatedAt: Date;
@@ -98,6 +103,63 @@ export async function listAdminBatches(_req: Request, res: Response): Promise<vo
   } catch (err) {
     httpLog.error(`[batch] listAdminBatches failed: ${(err as Error).message}`);
     res.status(500).json({ message: 'Failed to load batches.' });
+  }
+}
+
+// ─── Public: get by slug ─────────────────────────────────────────────────────
+//
+// v1.69 — slugs are auto-derived from `name`. This endpoint iterates
+// active batches and matches the input slug against each name's
+// derived slug. O(n) over the (tiny) active-batch set. For >100
+// active programs, switch to storing an explicit `slug` column with
+// a unique index — see context/multi-program-cms-design.md Q4.
+export async function getBatchBySlug(req: Request, res: Response): Promise<void> {
+  const rawSlug = req.params.slug;
+  const slug = Array.isArray(rawSlug) ? rawSlug[0] : rawSlug;
+  if (!slug) {
+    res.status(400).json({ message: 'Slug required.' });
+    return;
+  }
+  const normalised = slug.trim().toLowerCase();
+  try {
+    const active = await Batch.find({ isActive: true }).select('_id name description startDate endDate isActive isDefault').lean();
+    const match = active.find((b) => slugifyProgramName(b.name) === normalised);
+    if (!match) {
+      res.status(404).json({ message: 'Program not found.' });
+      return;
+    }
+    const faqCount = await FAQ.countDocuments({ batchId: match._id, status: 'approved' });
+    res.json({ ...match, faqCount });
+  } catch (err) {
+    httpLog.error(`[batch] getBatchBySlug failed: ${(err as Error).message}`);
+    res.status(500).json({ message: 'Failed to load program.' });
+  }
+}
+
+// ─── Admin: set as default ───────────────────────────────────────────────────
+//
+// v1.69 — promotes a single batch to `isDefault: true` and clears
+// the flag on every other batch. Used by the admin "Set as default"
+// action on /admin/batches.
+export async function setDefaultBatch(req: Request, res: Response): Promise<void> {
+  const rawId = req.params.id;
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
+  if (!id || !Types.ObjectId.isValid(id)) {
+    res.status(400).json({ message: 'Invalid batch id.' });
+    return;
+  }
+  try {
+    const exists = await Batch.findById(id).select('_id isActive').lean();
+    if (!exists) {
+      res.status(404).json({ message: 'Batch not found.' });
+      return;
+    }
+    const updated = await (Batch as any).setAsDefault(new Types.ObjectId(id));
+    invalidatePublicCaches();
+    res.json(updated);
+  } catch (err) {
+    httpLog.error(`[batch] setDefaultBatch failed: ${(err as Error).message}`);
+    res.status(500).json({ message: 'Failed to set default batch.' });
   }
 }
 

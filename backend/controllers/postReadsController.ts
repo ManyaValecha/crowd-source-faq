@@ -8,8 +8,14 @@
  */
 
 import { Request, Response } from 'express';
-import mongoose from 'mongoose';
+import mongoose, { Types } from 'mongoose';
 import CommunityPost from '../models/CommunityPost.js';
+import { withProgramScope } from '../utils/db/scopedQuery.js';
+
+function batchIdFromQuery(req: Request): string | null {
+  const raw = req.query.batchId;
+  return typeof raw === 'string' && Types.ObjectId.isValid(raw) ? raw : null;
+}
 import { communityLog } from '../utils/http/logger.js';
 import { buildCommentTree, timeTrialHoursRemaining } from './postCore.js';
 
@@ -57,7 +63,10 @@ export const getAllPosts = async (req: Request, res: Response): Promise<void> =>
     if (sortParam === 'oldest') sortObj = { _id: 1 };
     else if (sortParam === 'popular') sortObj = { 'upvotes.length': -1, _id: -1 };
 
-    const total = await CommunityPost.countDocuments(query);
+    // v1.69 — Phase 3b: scope every read by program.
+    const scoped = withProgramScope(query, batchIdFromQuery(req));
+
+    const total = await CommunityPost.countDocuments(scoped);
 
     const populateFields = [
       { path: 'author', select: 'name' },
@@ -73,7 +82,8 @@ export const getAllPosts = async (req: Request, res: Response): Promise<void> =>
     // rather than using keyset pagination. This is acceptable since the community
     // post list is small enough that loading all posts at once is fast.
     if (sortParam === 'popular') {
-      const allPosts = await CommunityPost.find(query)
+      // v1.69 — Phase 3b: use the scoped filter here too.
+    const allPosts = await CommunityPost.find(scoped)
         .select('-embedding')
         .populate(populateFields)
         .sort({ _id: -1 })
@@ -101,7 +111,7 @@ export const getAllPosts = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    const posts = await CommunityPost.find(query)
+    const posts = await CommunityPost.find(scoped)
       .select('-embedding')
       .populate(populateFields)
       .sort(sortObj)
@@ -170,10 +180,11 @@ export const getSolvedPosts = async (req: Request, res: Response): Promise<void>
 
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
-    const posts = await CommunityPost.find({
+    const scoped = withProgramScope({
       status: 'answered',
       updatedAt: { $gte: since },
-    })
+    }, batchIdFromQuery(req));
+    const posts = await CommunityPost.find(scoped)
       .sort({ updatedAt: -1 })
       .limit(limit)
       .populate('author', 'name')

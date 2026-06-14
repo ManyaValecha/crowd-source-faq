@@ -1,24 +1,25 @@
 /**
  * bot/commands/ban.ts — /ban <user_id_or_email> <reason>
  *
- * Admin. Calls POST {PUBLIC_URL}/api/admin/users/ban with
- * the user identifier and reason. The endpoint already
- * exists (referenced in authController) and produces a
- * structured ALERT log + a Notification row for the
- * affected user.
+ * Admin. Calls POST
+ *   {PUBLIC_URL}/api/admin/users/ban?batchId=...
+ * (Phase 6+) with the X-Internal-API-Key header. The
+ * batchId is threaded through so each per-program bot
+ * only bans users in its own program.
  */
 
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { isAdmin } from '../events/interactionCreate.js';
 import { logger } from '../../utils/http/logger.js';
 import type { BotConfig } from '../discordBot.js';
+import { buildBotApiUrl, botApiHeaders } from '../events/botApi.js';
 
 export const banCommandData = new SlashCommandBuilder()
   .setName('ban')
-  .setDescription('[admin] Ban a user (by id or email)')
+  .setDescription('[admin] Ban a user account')
   .addStringOption((o) =>
-    o.setName('user')
-      .setDescription('User id (Mongo _id) or email address')
+    o.setName('target')
+      .setDescription('User id (or email) to ban')
       .setRequired(true)
   )
   .addStringOption((o) =>
@@ -29,9 +30,17 @@ export const banCommandData = new SlashCommandBuilder()
   )
   .toJSON();
 
+function errorEmbed(msg: string): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(0xff6b6b)
+    .setTitle('Error')
+    .setDescription(msg.slice(0, 1000));
+}
+
 export async function executeBan(
   interaction: ChatInputCommandInteraction,
-  config: BotConfig
+  config: BotConfig,
+  batchId: string | null = null
 ): Promise<void> {
   if (!isAdmin(interaction, config)) {
     await interaction.reply({ content: '🔒 admin only', ephemeral: true });
@@ -43,15 +52,18 @@ export async function executeBan(
   }
   await interaction.deferReply({ ephemeral: true });
 
-  const user = interaction.options.getString('user', true).trim();
+  const target = interaction.options.getString('target', true);
   const reason = interaction.options.getString('reason', true);
 
   try {
-    const res = await fetch(`${config.publicUrl}/api/admin/users/ban`, {
-      method: 'POST',
-      headers: { 'X-Internal-API-Key': config.internalApiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user, reason, bannedBy: interaction.user.tag }),
-    });
+    const res = await fetch(
+      buildBotApiUrl(config, '/api/admin/users/ban', batchId),
+      {
+        method: 'POST',
+        headers: { 'X-Internal-API-Key': config.internalApiKey, 'Content-Type': 'application/json', ...botApiHeaders(config, batchId) },
+        body: JSON.stringify({ target, reason, bannedBy: interaction.user.tag }),
+      }
+    );
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
@@ -66,17 +78,10 @@ export async function executeBan(
     .setColor(0xed4245)
     .setTitle('User banned')
     .addFields(
-      { name: 'User', value: user },
+      { name: 'Target', value: `\`${target}\`` },
       { name: 'Banned by', value: `<@${interaction.user.id}>` },
       { name: 'Reason', value: reason.slice(0, 500) },
     )
     .setTimestamp(new Date());
   await interaction.followUp({ embeds: [embed] });
-}
-
-function errorEmbed(msg: string): EmbedBuilder {
-  return new EmbedBuilder()
-    .setColor(0xff6b6b)
-    .setTitle('Error')
-    .setDescription(msg.slice(0, 1000));
 }

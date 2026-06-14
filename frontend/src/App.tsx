@@ -24,6 +24,9 @@ const NewSupportRequestPage = lazy(() => import('./pages/NewSupportRequestPage')
 const SupportTicketPage = lazy(() => import('./pages/SupportTicketPage'));
 const GoldenTicketPage = lazy(() => import('./pages/GoldenTicketPage'));
 const WelcomePackagePage = lazy(() => import('./pages/WelcomePackagePage'));
+const Yaksha2026_27ProgramPage = lazy(() => import('./pages/Yaksha2026_27ProgramPage'));
+const ProgramPortalPage = lazy(() => import('./pages/ProgramPortalPage'));
+const ProgramPage = lazy(() => import('./pages/ProgramPage'));
 
 // Admin pages
 // v1.68 — AdminLogin page is gone. The single global AuthModal
@@ -44,6 +47,10 @@ const FaqReview = lazy(() => import('./admin/pages/FaqReview'));
 const AdminAutoAnswerQueue = lazy(() => import('./admin/pages/AdminAutoAnswerQueue'));
 const AdminFAQAudit = lazy(() => import('./admin/pages/AdminFAQAudit'));
 const AdminBatches = lazy(() => import('./admin/pages/AdminBatches'));
+const AdminProgramSettingsPage = lazy(() => import('./admin/pages/AdminProgramSettingsPage'));
+const AdminCoursesPage = lazy(() => import('./admin/pages/AdminCoursesPage'));
+const AdminProgramDashboard = lazy(() => import('./admin/pages/AdminProgramDashboard'));
+const AdminProgramDetail = lazy(() => import('./admin/pages/AdminProgramDetail'));
 const AdminSupportInbox = lazy(() => import('./admin/pages/AdminSupportInbox'));
 const AdminSupportTicket = lazy(() => import('./admin/pages/AdminSupportTicket'));
 const AdminSupportGuidance = lazy(() => import('./admin/pages/AdminSupportGuidance'));
@@ -117,11 +124,23 @@ function AppRoutes() {
     <>
       <Routes>
         <Route element={<MainLayout />}>
-          {/* The public FAQ discovery page is now the base URL — anyone
-              landing on the site gets the no-auth, anonymous-analytics
-              experience. */}
+          {/* v1.69 — Phase 12: `/` is now the original HomePage
+              (search + popular/recent FAQs + category accordion +
+              top solved + trending issues + FromMeetings). The
+              active program is determined by the admin's
+              BatchContext selection (the default program on
+              cold start, or whatever the admin last picked).
+              Non-admin users do NOT see a program picker on `/`. */}
           <Route path="/" element={<HomePage />} />
-          <Route path="/explore/select" element={<BatchPortalPage />} />
+          {/* v1.69 — Phase 12: the program picker (formerly
+              served at `/`) is now at `/programs` for explicit
+              program browsing. Admins land here from the
+              Programs Hub link; non-admins generally don't
+              need it. */}
+          <Route path="/programs" element={<ProgramPortalPage />} />
+          {/* v1.69 — Phase 12: keep the legacy redirect for
+              bookmarks that pointed at the old picker URL. */}
+          <Route path="/explore/select" element={<Navigate to="/programs" replace />} />
           <Route path="/faq" element={<FAQPage />} />
           <Route path="/faq/:id" element={<FAQPage />} />
           <Route path="/community" element={<CommunityPage />} />
@@ -148,7 +167,13 @@ function AppRoutes() {
             }
           />
 
-          <Route path="/welcome" element={<WelcomePackagePage />} />
+          <Route path="/" element={<HomePage />} />
+          {/* v1.69 — slug-routed program microsite. Deep-link to a
+              specific program (e.g. /program/summership). The home
+              page at `/` is the standard FAQ-discovery page, not a
+              program portal — the BatchSwitcher in the navbar lets
+              users change programs from there. */}
+          <Route path="/program/:slug" element={<ProgramPage />} />
 
           {/* Member-only: a user's own settings */}
           <Route
@@ -187,10 +212,21 @@ function AppRoutes() {
         <Route path="/admin/faqs/review" element={<AdminRoute><AdminLayout><FaqReview /></AdminLayout></AdminRoute>} />
         <Route path="/admin/welcome" element={<AdminRoute><AdminLayout><AdminWelcomePage /></AdminLayout></AdminRoute>} />
         <Route path="/admin/projects" element={<AdminRoute><AdminLayout><AdminProjectsPage /></AdminLayout></AdminRoute>} />
-        <Route path="/admin/projects" element={<AdminRoute><AdminLayout><AdminProjectsPage /></AdminLayout></AdminRoute>} />
         <Route path="/admin/auto-answer" element={<AdminRoute><AdminLayout><AdminAutoAnswerQueue /></AdminLayout></AdminRoute>} />
         <Route path="/admin/faq-audit" element={<AdminRoute><AdminLayout><AdminFAQAudit /></AdminLayout></AdminRoute>} />
         <Route path="/admin/batches" element={<AdminRoute><AdminLayout><AdminBatches /></AdminLayout></AdminRoute>} />
+        {/* v1.69 — admin CRUD for courses within a program. */}
+        <Route path="/admin/courses" element={<AdminRoute><AdminLayout><AdminCoursesPage /></AdminLayout></AdminRoute>} />
+        {/* v1.69 — per-program settings editor. Admin sets the
+            theme, hero copy, and which sections show on the
+            public program page. */}
+        <Route path="/admin/programs/:id/settings" element={<AdminRoute><AdminLayout><AdminProgramSettingsPage /></AdminLayout></AdminRoute>} />
+        {/* v1.69 — Phase 10: admin program dashboard (list) and
+            detail (tabbed per-program view). Each tab in the
+            detail view is a thin wrapper around the existing
+            per-program admin endpoints added in Phases 4-9. */}
+        <Route path="/admin/programs" element={<AdminRoute><AdminLayout><AdminProgramDashboard /></AdminLayout></AdminRoute>} />
+        <Route path="/admin/programs/:id" element={<AdminRoute><AdminLayout><AdminProgramDetail /></AdminLayout></AdminRoute>} />
 
         {/* Session Support admin (not gated by feature flag) */}
         <Route path="/admin/support" element={<AdminRoute><AdminLayout><AdminSupportInbox /></AdminLayout></AdminRoute>} />

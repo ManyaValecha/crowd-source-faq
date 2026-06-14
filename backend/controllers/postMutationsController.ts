@@ -113,6 +113,20 @@ export const createPost = async (req: Request, res: Response): Promise<void> => 
       }
     }
 
+    // v1.69 — Phase 3d: tag new posts with the active program.
+    // The programScope middleware (when chained on this route)
+    // attaches req.programContext; if the caller didn't chain it,
+    // we fall back to the body's batchId, then to null (legacy
+    // single-tenant mode).
+    const programContext = req.programContext;
+    const batchIdFromBody = (req.body as { batchId?: string })?.batchId;
+    const resolvedBatchId =
+      (programContext?.batchId && Types.ObjectId.isValid(programContext.batchId))
+        ? new Types.ObjectId(programContext.batchId)
+        : batchIdFromBody && Types.ObjectId.isValid(batchIdFromBody)
+          ? new Types.ObjectId(batchIdFromBody)
+          : null;
+
     // Create post linked to the authenticated user with a default 'unanswered' status
     const post = await CommunityPost.create({
       title: sanitizeHtml(title),
@@ -120,6 +134,7 @@ export const createPost = async (req: Request, res: Response): Promise<void> => 
       author: req.user!._id,
       status: 'unanswered',
       embedding,
+      batchId: resolvedBatchId,
       tags: safeTags,
       attachments: safeAttachments,
       lifecycle: {
@@ -152,11 +167,22 @@ export const createPost = async (req: Request, res: Response): Promise<void> => 
 // POST /api/community/:id/upvote — Toggle upvote
 export const toggleUpvote = async (req: Request, res: Response): Promise<void> => {
   if (!req.user) { res.status(401).json({ message: 'Not authorized' }); return; }
+
   try {
     const post = await CommunityPost.findById(req.params.id);
     if (!post) {
       res.status(404).json({ message: 'Post not found.' });
       return;
+    }
+    // v1.69 — Phase 3d: scope by program. Upvotes must belong to
+    // the active program.
+    const programContext = req.programContext;
+    if (programContext) {
+      const postBatch = (post as { batchId?: Types.ObjectId | string | null }).batchId;
+      if (!postBatch || postBatch.toString() !== programContext.batchId) {
+        res.status(404).json({ message: 'Post not found.' });
+        return;
+      }
     }
 
     const userId = req.user!._id.toString();
@@ -278,6 +304,15 @@ export const reportPost = async (req: Request<{ id: string }, {}, { reason: stri
       res.status(404).json({ message: 'Post not found.' });
       return;
     }
+    // v1.69 — Phase 3d: scope by program.
+    const programContext = req.programContext;
+    if (programContext) {
+      const postBatch = (post as { batchId?: Types.ObjectId | string | null }).batchId;
+      if (!postBatch || postBatch.toString() !== programContext.batchId) {
+        res.status(404).json({ message: 'Post not found.' });
+        return;
+      }
+    }
 
     // Prevent duplicate reports by the same user
     const alreadyReported = post.reports.some(
@@ -315,6 +350,17 @@ export const deletePost = async (req: Request, res: Response): Promise<void> => 
     if (!post) {
       res.status(404).json({ message: 'Post not found.' });
       return;
+    }
+    // v1.69 — Phase 3d: when a program context is attached, the
+    // post must belong to that program. Cross-program deletes are
+    // denied (don't 403 — return 404 to avoid leaking existence).
+    const programContext = req.programContext;
+    if (programContext) {
+      const postBatch = (post as { batchId?: Types.ObjectId | string | null }).batchId;
+      if (!postBatch || postBatch.toString() !== programContext.batchId) {
+        res.status(404).json({ message: 'Post not found.' });
+        return;
+      }
     }
 
     const postTitle = post.title;

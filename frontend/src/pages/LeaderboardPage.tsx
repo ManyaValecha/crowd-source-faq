@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 import Footer from '../components/layout/Footer';
+import UserActiveProgramIndicator from '../components/layout/UserActiveProgramIndicator';
 import { CommunityDoodles } from '../components/ui/PageDoodles';
 import Avatar from '../components/ui/Avatar';
 
@@ -96,6 +97,14 @@ export default function LeaderboardPage() {
       <CommunityDoodles />
 
       <main className="max-w-3xl mx-auto px-4 sm:px-6 pt-20 sm:pt-24 pb-12 relative z-10">
+        {/* v1.69 — Phase 12: persistent "browsing program" pill
+            so the user always knows which program's leaderboard
+            they're viewing. The actual leaderboard query
+            (Phase 3i) uses currentBatch._id to pull per-program
+            reputation rows from ProgramReputation. */}
+        <div className="flex justify-center">
+          <UserActiveProgramIndicator />
+        </div>
         {/* Header + period tabs */}
         <div className="mb-6 sm:mb-8 text-center">
           <h1 className="text-2xl sm:text-3xl font-serif text-ink tracking-tight">Community Leaderboard</h1>

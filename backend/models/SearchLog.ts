@@ -14,6 +14,8 @@ export interface ISearchLog extends Document {
   // Optional for anonymous searches (no req.user); required
   // for logged-in searches.
   userId?: Types.ObjectId | null;
+  /** v1.69 — Program this search was performed within. */
+  batchId?: Types.ObjectId | null;
 }
 
 // Schema designed to track user search behavior for analytics and trending topics
@@ -43,6 +45,15 @@ const searchLogSchema = new MongooseSchema(
       ref: 'User',
       default: null,
       index: true, // for the user-activity aggregation
+    },
+    // v1.69 — search analytics now scoped to a program so the
+    // trending-topics / unresolved-search dashboards can show
+    // "this program's hot queries" instead of a global mix.
+    batchId: {
+      type: MongooseSchema.Types.ObjectId,
+      ref: 'Batch',
+      default: null,
+      index: true,
     },
   },
   { timestamps: true } // Automatically records exactly when the search happened via 'createdAt'

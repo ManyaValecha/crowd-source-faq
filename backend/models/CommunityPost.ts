@@ -126,6 +126,8 @@ export interface ICommunityPost extends Document {
   escalationResolvedAt: Date | null;
   escalationResolvedBy: Types.ObjectId | null;
   escalationOutcome: string | null;
+  /** v1.69 — Program this community thread belongs to. */
+  batchId?: Types.ObjectId | null;
   answeredFromKnowledgeId?: Types.ObjectId;
   timeTrialStatus: TimeTrialStatus;
   timeTrialStartedAt: Date | null;
@@ -187,6 +189,14 @@ const communityPostSchema = new MongooseSchema(
     body: { type: String, required: true, trim: true },
     tags: { type: [String], default: [] },
     author: { type: MongooseSchema.Types.ObjectId, ref: 'User', required: true },
+    // v1.69 — see interface. Every community post is now tagged
+    // with the program it's part of, mirroring the FAQ model.
+    batchId: {
+      type: MongooseSchema.Types.ObjectId,
+      ref: 'Batch',
+      default: null,
+      index: true,
+    },
     status: {
       type: String,
       enum: ['answered', 'unanswered'] as CommunityPostStatus[],

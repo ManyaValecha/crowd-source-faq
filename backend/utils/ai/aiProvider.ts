@@ -96,8 +96,16 @@ export function getModelForProvider(model: string, provider: AIProvider): string
  * Reads provider/model from per-pipeline env vars, falls back to global defaults.
  * Does NOT round-trip through getProviderConfig to avoid duplicate async overhead.
  */
-export async function getPipelineProviderConfig(pipeline: string): Promise<ProviderConfig> {
-  const db = await loadDbOverrides();
+// v1.69 — Phase 4: getPipelineProviderConfig now accepts an
+// optional batchId. When supplied, the per-program override is
+// consulted first (via resolveActiveAiConfig), falling back to
+// the global default. The call site can also omit batchId to
+// get the prior (global-only) behaviour.
+export async function getPipelineProviderConfig(
+  pipeline: string,
+  batchId: string | null = null
+): Promise<ProviderConfig> {
+  const db       = await resolveActiveAiConfig(batchId) ?? await loadDbOverrides();
   const hasKey = (p: AIProvider) => !!(db[p].apiKey || process.env[ENV_KEY[p]]);
 
   let provider: AIProvider;
@@ -222,37 +230,87 @@ interface DbOverrides {
 let _cache: { value: DbOverrides; expiresAt: number } | null = null;
 const CACHE_TTL_MS = 5_000;
 
-async function loadDbOverrides(): Promise<DbOverrides> {
-  if (_cache && _cache.expiresAt > Date.now()) return _cache.value;
-  try {
-    const config = await AiConfig.findOne({ isActive: true });
-    const v: DbOverrides = {
-      anthropic: { apiKey: config?.getApiKey('anthropic') ?? '', baseURL: config?.providers?.anthropic?.baseURL ?? '', model: config?.providers?.anthropic?.model ?? '' },
-      openai: { apiKey: config?.getApiKey('openai') ?? '', baseURL: config?.providers?.openai?.baseURL ?? '', model: config?.providers?.openai?.model ?? '' },
-      xai: { apiKey: config?.getApiKey('xai') ?? '', baseURL: config?.providers?.xai?.baseURL ?? '', model: config?.providers?.xai?.model ?? '' },
-      minimax: { apiKey: config?.getApiKey('minimax') ?? '', baseURL: config?.providers?.minimax?.baseURL ?? '', model: config?.providers?.minimax?.model ?? '' },
-      gemini: { apiKey: config?.getApiKey('gemini') ?? '', baseURL: config?.providers?.gemini?.baseURL ?? '', model: config?.providers?.gemini?.model ?? '' },
-      custom: { apiKey: config?.getApiKey('custom') ?? '', baseURL: config?.providers?.custom?.baseURL ?? '', model: config?.providers?.custom?.model ?? '' },
-    };
-    _cache = { value: v, expiresAt: Date.now() + CACHE_TTL_MS };
-    return v;
-  } catch (err) {
-    // DB unavailable — log warning and return empty overrides so we fall back to env
-    logger.warn(`[aiProvider] Failed to load DbOverrides from AiConfig (using env fallbacks): ${(err as Error).message}`);
-    return {
-      anthropic: { apiKey: '', baseURL: '', model: '' },
-      openai: { apiKey: '', baseURL: '', model: '' },
-      xai: { apiKey: '', baseURL: '', model: '' },
-      minimax: { apiKey: '', baseURL: '', model: '' },
-      gemini: { apiKey: '', baseURL: '', model: '' },
-      custom: { apiKey: '', baseURL: '', model: '' },
-    };
+// v1.69 — Phase 4: per-program config resolver. Walks the chain
+// (1) per-program override, (2) global default. Returns null if
+// neither exists (the caller falls back to env-var defaults).
+// Cache key includes batchId so per-program lookups don't leak
+// across programs. Cache TTL is the same 5s as the legacy cache.
+let _configCache: { key: string; value: DbOverrides | null; expiresAt: number } | null = null;
+
+export async function resolveActiveAiConfig(batchId: string | null = null): Promise<DbOverrides | null> {
+  const cacheKey = batchId ?? '__global__';
+  if (_configCache && _configCache.key === cacheKey && _configCache.expiresAt > Date.now()) {
+    return _configCache.value;
   }
+  // v1.69 — Phase 4: walk the per-program → global resolver
+  // chain. We use `any` for the merged config type because
+  // mongoose's type narrowing doesn't flow through the
+  // `override ?? await ...` chain (the override and the
+  // fallback return different MongooseDocument variants).
+  let config: any = null;
+  try {
+    if (batchId) {
+      // Try per-program override first, then global fallback.
+      const override = await AiConfig.findOne({ batchId, isActive: true });
+      config = override
+        ?? await AiConfig.findOne({ batchId: null, isActive: true });
+    } else {
+      config = await AiConfig.findOne({ batchId: null, isActive: true });
+    }
+  } catch (err) {
+    logger.warn(`[aiProvider] resolveActiveAiConfig failed: ${(err as Error).message}`);
+    _configCache = { key: cacheKey, value: null, expiresAt: Date.now() + CACHE_TTL_MS };
+    return null;
+  }
+  if (!config) {
+    _configCache = { key: cacheKey, value: null, expiresAt: Date.now() + CACHE_TTL_MS };
+    return null;
+  }
+  const v: DbOverrides = {
+    anthropic: { apiKey: config?.getApiKey('anthropic') ?? '', baseURL: config?.providers?.anthropic?.baseURL ?? '', model: config?.providers?.anthropic?.model ?? '' },
+    openai:    { apiKey: config?.getApiKey('openai')    ?? '', baseURL: config?.providers?.openai?.baseURL    ?? '', model: config?.providers?.openai?.model    ?? '' },
+    xai:       { apiKey: config?.getApiKey('xai')       ?? '', baseURL: config?.providers?.xai?.baseURL       ?? '', model: config?.providers?.xai?.model       ?? '' },
+    minimax:   { apiKey: config?.getApiKey('minimax')   ?? '', baseURL: config?.providers?.minimax?.baseURL   ?? '', model: config?.providers?.minimax?.model   ?? '' },
+      gemini:    { apiKey: config?.getApiKey('gemini')    ?? '', baseURL: config?.providers?.gemini?.baseURL    ?? '', model: config?.providers?.gemini?.model    ?? '' },
+      custom:    { apiKey: config?.getApiKey('custom')    ?? '', baseURL: config?.providers?.custom?.baseURL    ?? '', model: config?.providers?.custom?.model    ?? '' },
+    };
+    _configCache = { key: cacheKey, value: v, expiresAt: Date.now() + CACHE_TTL_MS };
+    return v;
+}
+
+// v1.69 — Phase 4: legacy loadDbOverrides keeps the same name and
+// signature so the rest of the codebase doesn't need to thread
+// batchId through every call site on day one. The (batchId=null)
+// resolution path is the global default, matching the prior
+// behaviour. The cache key is __global__ so per-program lookups
+// (added below) have a separate cache slot.
+async function loadDbOverrides(): Promise<DbOverrides> {
+  const resolved = await resolveActiveAiConfig(null);
+  if (resolved) {
+    _cache = { value: resolved, expiresAt: Date.now() + CACHE_TTL_MS };
+    return resolved;
+  }
+  // v1.69 — Phase 4: belt-and-braces. resolveActiveAiConfig
+  // returned null (e.g. no active doc in DB). Fall back to
+  // empty overrides so every provider resolves to env-var
+  // defaults.
+  if (_cache && _cache.expiresAt > Date.now()) return _cache.value;
+  const empty: DbOverrides = {
+    anthropic: { apiKey: '', baseURL: '', model: '' },
+    openai:    { apiKey: '', baseURL: '', model: '' },
+    xai:       { apiKey: '', baseURL: '', model: '' },
+    minimax:   { apiKey: '', baseURL: '', model: '' },
+    gemini:    { apiKey: '', baseURL: '', model: '' },
+    custom:    { apiKey: '', baseURL: '', model: '' },
+  };
+  _cache = { value: empty, expiresAt: Date.now() + CACHE_TTL_MS };
+  return empty;
 }
 
 /** Invalidate the DB override cache. Call after admin updates config. */
 export function invalidateProviderCache(): void {
   _cache = null;
+  _configCache = null;
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────

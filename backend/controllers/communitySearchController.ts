@@ -3,6 +3,8 @@ import CommunityPost, { ICommunityPost } from '../models/CommunityPost.js';
 import { generateEmbedding, generateQueryEmbedding } from '../utils/ai/embeddings.js';
 import { Request, Response } from 'express';
 import { computeRRF, applySearchThreshold, type SearchResultItem } from '../utils/http/search.js';
+// v1.69 — Phase 3h: program-scope the community search.
+import { withProgramScope } from '../utils/db/scopedQuery.js';
 import { communityLog } from '../utils/http/logger.js';
 
 const COLLECTION_NAME = CommunityPost.collection.name;
@@ -80,8 +82,9 @@ export const searchCommunityPosts = async (req: Request, res: Response): Promise
   try {
     const q = String(req.query.q || '').trim();
 
+    const batchIdParam = (req.query.batchId as string | undefined) ?? null;
     if (!q) {
-      const posts = await CommunityPost.find({})
+      const posts = await CommunityPost.find(withProgramScope({}, batchIdParam))
         .select('-embedding')
         .populate('author', 'name')
         .populate('comments.author', 'name')
@@ -105,7 +108,7 @@ export const searchCommunityPosts = async (req: Request, res: Response): Promise
       .slice(0, 20);
 
     const ids = filtered.map((d) => d._id);
-    const hydrated = await CommunityPost.find({ _id: { $in: ids } })
+    const hydrated = await CommunityPost.find(withProgramScope({ _id: { $in: ids } }, batchIdParam))
       .select('-embedding')
       .populate('author', 'name')
       .populate('comments.author', 'name');

@@ -10,6 +10,8 @@ export interface IUnresolvedSearch extends Document {
   status: UnresolvedSearchStatus;
   resolvedBy: Types.ObjectId | null;
   resolution: 'faq_updated' | 'community_post_created' | 'dismissed';
+  /** v1.69 — Program this unresolved query belongs to. */
+  batchId?: Types.ObjectId | null;
   createdAt: Date;
 }
 
@@ -51,6 +53,15 @@ const unresolvedSearchSchema = new mongoose.Schema(
       type: String,
       enum: ['faq_updated', 'community_post_created', 'dismissed', null],
       default: null,
+    },
+    // v1.69 — every unresolved search is now tagged with the program
+    // it was issued from so the admin "Unresolved searches" view
+    // can filter by program.
+    batchId: {
+      type: MongooseSchema.Types.ObjectId,
+      ref: 'Batch',
+      default: null,
+      index: true,
     },
   },
   { timestamps: { createdAt: true, updatedAt: false } }

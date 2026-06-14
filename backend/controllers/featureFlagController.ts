@@ -79,14 +79,33 @@ export async function listFeatureFlags(_req: Request, res: Response): Promise<vo
 const _cache = new Map<string, { enabled: boolean; expiresAt: number }>();
 const CACHE_TTL_MS = 30_000;
 
-export async function isFeatureEnabled(key: FeatureFlagKey): Promise<boolean> {
-  const cached = _cache.get(key);
+export async function isFeatureEnabled(
+  key: FeatureFlagKey,
+  batchId: string | null = null
+): Promise<boolean> {
+  // v1.69 — Phase 8: per-program flag overrides. The lookup order
+  // is (1) per-program override with `(key, batchId)`, falling back
+  // to (2) the global default with `(key, batchId=null)`. A null
+  // batchId is treated as the global scope and matches the
+  // (batchId: null) doc directly.
+  const cacheKey = batchId ? `${key}::${batchId}` : key;
+  const cached = _cache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.enabled;
   try {
     await ensureFlag(key);
-    const flag = await FeatureFlag.findOne({ key }).select('enabled').lean();
+    const flag = await FeatureFlag.findOne({
+      key,
+      $or: [
+        ...(batchId ? [{ batchId: new Types.ObjectId(batchId) }] : []),
+        { batchId: null },
+      ],
+    })
+      // Per-program override wins over global default.
+      .sort({ batchId: -1 })
+      .select('enabled')
+      .lean();
     const enabled = !!(flag && flag.enabled);
-    _cache.set(key, { enabled, expiresAt: Date.now() + CACHE_TTL_MS });
+    _cache.set(cacheKey, { enabled, expiresAt: Date.now() + CACHE_TTL_MS });
     return enabled;
   } catch {
     return false; // fail closed
@@ -142,5 +161,158 @@ export async function toggleFeatureFlag(req: Request, res: Response): Promise<vo
   } catch (err) {
     adminLog.error(`[featureFlags] toggleFeatureFlag failed: ${(err as Error).message}`);
     res.status(500).json({ message: 'Failed to update feature flag.' });
+  }
+};
+
+// ─── Per-Program Overrides (Phase 8) ────────────────────────────────────────
+//
+// Each program can carry its own FeatureFlag override. The
+// isFeatureEnabled() resolver walks the chain (per-program →
+// global default) and the cache is keyed by program. The admin
+// flips per-program overrides here, and the program-specific
+// truth takes effect on the next call.
+
+const batchIdParam = (req: Request): string | null => {
+  const raw = req.params.batchId ?? req.params.id;
+  if (Array.isArray(raw)) return raw[0] ?? null;
+  return raw ?? null;
+};
+
+function asObjectIdOr400(res: Response, raw: string | null): Types.ObjectId | null {
+  if (!raw) {
+    res.status(400).json({ message: 'batchId is required.' });
+    return null;
+  }
+  if (!Types.ObjectId.isValid(raw)) {
+    res.status(400).json({ message: 'Invalid batchId.' });
+    return null;
+  }
+  return new Types.ObjectId(raw);
+}
+
+const perProgramOverrideSchema = z.object({
+  enabled: z.boolean(),
+});
+
+/**
+ * PUT /api/admin/programs/:id/feature-flags/:key
+ * Upsert a per-program override. The override takes effect on
+ * the next isFeatureEnabled(key, batchId) call.
+ */
+export async function setPerProgramFeatureFlagOverride(
+  req: Request, res: Response
+): Promise<void> {
+  const rawKey = req.params.key;
+  const key = Array.isArray(rawKey) ? rawKey[0] : rawKey;
+  if (!key || !(key in FEATURE_FLAGS)) {
+    res.status(404).json({ message: 'Unknown feature flag.' });
+    return;
+  }
+  const batchId = asObjectIdOr400(res, batchIdParam(req));
+  if (!batchId) return;
+  const parsed = perProgramOverrideSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ message: 'Invalid input.', issues: parsed.error.issues });
+    return;
+  }
+  const userId = (req as Request & { user?: { _id?: Types.ObjectId | string } }).user?._id;
+  const now = new Date();
+  try {
+    const doc = await FeatureFlag.findOneAndUpdate(
+      { key, batchId },
+      {
+        $set: {
+          enabled: parsed.data.enabled,
+          updatedBy: userId ? new Types.ObjectId(String(userId)) : null,
+          updatedAt: now,
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).lean();
+    invalidateFeatureFlagCache(key);
+    adminLog.info(
+      `[featureFlags] per-program override set — program=${String(batchId)} key=${key} → ${parsed.data.enabled ? 'enabled' : 'disabled'}`
+    );
+    res.json({ flag: doc });
+  } catch (err) {
+    adminLog.error(`[featureFlags] setPerProgramFeatureFlagOverride failed: ${(err as Error).message}`);
+    res.status(500).json({ message: 'Failed to set per-program feature flag override.' });
+  }
+}
+
+/**
+ * DELETE /api/admin/programs/:id/feature-flags/:key
+ * Remove the per-program override (falls back to the global
+ * default on the next isFeatureEnabled() call).
+ */
+export async function deletePerProgramFeatureFlagOverride(
+  req: Request, res: Response
+): Promise<void> {
+  const rawKey = req.params.key;
+  const key = Array.isArray(rawKey) ? rawKey[0] : rawKey;
+  if (!key) {
+    res.status(400).json({ message: 'key is required.' });
+    return;
+  }
+  const batchId = asObjectIdOr400(res, batchIdParam(req));
+  if (!batchId) return;
+  try {
+    const result = await FeatureFlag.deleteOne({ key, batchId });
+    invalidateFeatureFlagCache(key);
+    res.json({ ok: true, deleted: result.deletedCount });
+  } catch (err) {
+    adminLog.error(`[featureFlags] deletePerProgramFeatureFlagOverride failed: ${(err as Error).message}`);
+    res.status(500).json({ message: 'Failed to delete per-program feature flag override.' });
+  }
+}
+
+/**
+ * GET /api/admin/programs/:id/feature-flags
+ * List every flag with its resolved value for this program
+ * (per-program override → global default fallback) and an
+ * `overridden` boolean so the admin UI can show which flags
+ * have a per-program override set.
+ */
+export async function listPerProgramFeatureFlags(
+  req: Request, res: Response
+): Promise<void> {
+  const batchId = asObjectIdOr400(res, batchIdParam(req));
+  if (!batchId) return;
+  try {
+    // Fetch the per-program overrides for this program in one
+    // round trip; we'll join with the global default below.
+    const overrides = await FeatureFlag.find({ batchId })
+      .select('key enabled updatedAt')
+      .lean();
+    const overrideByKey = new Map(overrides.map((o) => [o.key, o]));
+
+    // Resolve each known flag with the same chain the runtime
+    // uses (per-program → global default).
+    const rows = await Promise.all(
+      (Object.keys(FEATURE_FLAGS) as FeatureFlagKey[]).map(async (key) => {
+        const override = overrideByKey.get(key);
+        if (override) {
+          return {
+            key,
+            enabled: override.enabled,
+            overridden: true,
+            updatedAt: override.updatedAt,
+            source: 'program' as const,
+          };
+        }
+        const enabled = await isFeatureEnabled(key, null);
+        return {
+          key,
+          enabled,
+          overridden: false,
+          updatedAt: null,
+          source: 'env' as const,
+        };
+      })
+    );
+    res.json({ batchId, flags: rows });
+  } catch (err) {
+    adminLog.error(`[featureFlags] listPerProgramFeatureFlags failed: ${(err as Error).message}`);
+    res.status(500).json({ message: 'Failed to list per-program feature flags.' });
   }
 }

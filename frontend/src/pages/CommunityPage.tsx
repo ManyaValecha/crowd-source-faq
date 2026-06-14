@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Footer from '../components/layout/Footer';
+import UserActiveProgramIndicator from '../components/layout/UserActiveProgramIndicator';
 import CommunityPostCard from '../components/community/CommunityPostCard';
 import ThreadDetail from '../components/community/ThreadDetail';
 import Avatar from '../components/ui/Avatar';
@@ -271,7 +272,16 @@ export default function CommunityPage() {
       <CommunityDoodles />
 
       <main className="max-w-3xl mx-auto px-4 sm:px-6 pt-28 sm:pt-32 pb-8 sm:pb-10 relative z-10">
-
+        {/* v1.69 — Phase 12: persistent "browsing program" pill
+            so the user always knows which program's community
+            feed they're scrolling. The pill reads from
+            BatchContext. The actual data fetch below already
+            uses currentBatch._id for the ?batchId=... filter
+            — this commit is a UX improvement, not a backend
+            change. */}
+        <div className="flex justify-center mb-4">
+          <UserActiveProgramIndicator />
+        </div>
         <div className="flex items-start justify-between gap-3 sm:gap-4 mb-6 sm:mb-8">
           <div className="min-w-0">
             <h1 className="text-xl sm:text-2xl font-serif text-ink tracking-tight">Community Board</h1>

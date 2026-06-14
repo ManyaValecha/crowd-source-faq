@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
 import { Types } from 'mongoose';
+// v1.69 — Phase 3g: program-scope the moderation log reads.
+import { withProgramScope } from '../utils/db/scopedQuery.js';
 import User from '../models/User.js';
 import ModerationLog from '../models/ModerationLog.js';
 import { logAction } from './adminController.js';
@@ -214,14 +216,16 @@ export const getModerationLogs = async (req: Request, res: Response): Promise<vo
     const filter: Record<string, unknown> = {};
     if (targetId) filter.targetId = targetId;
     if (targetType) filter.targetType = targetType;
+    // v1.69 — Phase 3g: optionally scope by program.
+    const scoped = withProgramScope(filter, req.query.batchId as string | undefined);
 
     const [logs, total] = await Promise.all([
-      ModerationLog.find(filter)
+      ModerationLog.find(scoped)
         .populate('moderatorId', 'name email')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
-      ModerationLog.countDocuments(filter),
+      ModerationLog.countDocuments(scoped),
     ]);
 
     res.json({ logs, total, page, pages: Math.ceil(total / limit) });

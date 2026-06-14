@@ -19,11 +19,13 @@ function ClockIcon(): React.ReactElement {
 
 interface RecentFaqsCardProps {
   batchId: string | null;
+  /** v1.69 — optional course filter (from the home page picker). */
+  courseId?: string | null;
   onSelectFaq: (faq: PublicFaq) => void;
 }
 
-export function RecentFaqsCard({ batchId, onSelectFaq }: RecentFaqsCardProps): React.ReactElement {
-  const { data, loading } = useRecentFaqs(batchId, 5);
+export function RecentFaqsCard({ batchId, courseId, onSelectFaq }: RecentFaqsCardProps): React.ReactElement {
+  const { data, loading } = useRecentFaqs(batchId, courseId, 5);
 
   return (
     <CardSection

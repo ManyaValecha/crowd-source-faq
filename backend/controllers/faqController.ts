@@ -13,6 +13,20 @@ import { autoAwardBadges } from './reputationController.js';
 import { sanitizeHtml } from '../utils/http/sanitize.js';
 import Batch from '../models/Batch.js';
 import { invalidatePublicCaches } from './publicFaqController.js';
+// v1.69 — Phase 3a: every public read in this file funnels its
+// Mongoose filter through withProgramScope. Single tenant callers
+// (no batchId) keep working until the rollout flips required=true.
+import { withProgramScope } from '../utils/db/scopedQuery.js';
+
+// v1.69 — batchIdFromQuery helper: read ?batchId=... from
+// any request. The type is intentionally narrow ({query: any})
+// so it accepts every Request<T, ..., CustomQuery, ...>
+// shape in the codebase. The value is validated against
+// Types.ObjectId.isValid.
+function batchIdFromQuery(req: { query: any }): string | null {
+  const raw = req.query?.batchId;
+  return typeof raw === 'string' && Types.ObjectId.isValid(raw) ? raw : null;
+}
 
 async function logFreshEvent(
   event: FreshReviewEventType,
@@ -90,14 +104,17 @@ export const getAllFAQs = async (req: Request<{}, {}, {}, GetAllFAQsQuery>, res:
     const query: Record<string, unknown> = {};
     if (category) query.category = category;
     if (cursorId) query._id = { $lt: cursorId };
+    // v1.69 — Phase 3a: scope every read to the active program.
+    // withProgramScope returns FilterQuery<T> which is
+    // structurally compatible with mongoose's find/count
+    // filters — no cast needed.
+    const scoped = withProgramScope(query, batchIdFromQuery(req));
 
-    const totalCount = await FAQ.countDocuments(
-      Object.keys(query).length ? query : {}
-    );
+    const totalCount = await FAQ.countDocuments(scoped);
 
     // When limit=0 (default), return all FAQs grouped — backward-compatible behavior
     // Use sort by _id desc so cursor (last _id) works correctly
-    const faqs = await FAQ.find(query)
+    const faqs = await FAQ.find(scoped)
       .select('-embedding')
       .sort({ _id: -1 })
       .limit(limit > 0 ? limit + 1 : undefined as unknown as number); // fetch one extra to detect hasMore
@@ -204,8 +221,10 @@ export const getRecentFAQs = async (req: Request, res: Response): Promise<void> 
       const d = new Date(since);
       if (!isNaN(d.getTime())) filter.createdAt = { $gte: d };
     }
+    // v1.69 — Phase 3a: scope by program.
+    const scoped = withProgramScope(filter, batchIdFromQuery(req));
 
-    const faqs = await FAQ.find(filter)
+    const faqs = await FAQ.find(scoped)
       .select('_id question answer category createdAt sourceType sourceMeetingTopic helpfulVotes tags')
       .sort({ createdAt: -1 })
       .limit(limit)
@@ -241,11 +260,13 @@ export const getPaginatedFAQs = async (req: Request<{}, {}, {}, GetPaginatedFAQs
     const query: Record<string, unknown> = {};
     if (category) query.category = category;
     if (cursorId) query._id = { $lt: cursorId };
+    // v1.69 — Phase 3a: scope by program.
+    const scoped = withProgramScope(query, batchIdFromQuery(req));
 
     // Fetch one extra to detect hasMore
     const [faqs, total] = await Promise.all([
-      FAQ.find(query).select('-embedding').sort({ _id: -1 }).limit(limit + 1),
-      FAQ.countDocuments(query),
+      FAQ.find(scoped).select('-embedding').sort({ _id: -1 }).limit(limit + 1),
+      FAQ.countDocuments(scoped),
     ]);
 
     const hasMore = faqs.length > limit;
@@ -462,7 +483,11 @@ export const checkFAQMatch = async (req: Request<{}, {}, CheckFAQMatchBody>, res
     if (!db) throw new Error('Database connection not ready');
     const collection = db.collection('yaksha_faq_faqs');
 
-    const pipeline = [
+    const batchId = batchIdFromQuery(req);
+    const pipeline: mongoose.PipelineStage[] = batchId
+      ? [{ $match: { batchId: new Types.ObjectId(batchId) } }]
+      : [];
+    pipeline.push(
       {
         $vectorSearch: {
           index: 'vector_index',
@@ -481,7 +506,7 @@ export const checkFAQMatch = async (req: Request<{}, {}, CheckFAQMatchBody>, res
           score: { $meta: 'vectorSearchScore' },
         },
       },
-    ];
+    );
 
     const results = await collection.aggregate(pipeline).toArray();
 

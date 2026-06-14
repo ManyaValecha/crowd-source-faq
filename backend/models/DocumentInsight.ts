@@ -63,6 +63,8 @@ export interface IDocumentInsight extends Document {
   promotionReason: string | null;
   /** AI prompt version for reproducibility / re-extraction. */
   aiPromptVersion: string;
+  /** v1.69 — Program this insight was extracted from. */
+  batchId?: Types.ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -100,6 +102,14 @@ const documentInsightSchema = new MongooseSchema<IDocumentInsight>(
     publishedFaqId: { type: MongooseSchema.Types.ObjectId, ref: 'FAQ', default: null },
     promotionReason: { type: String, default: null, maxlength: 500 },
     aiPromptVersion: { type: String, default: 'v1', maxlength: 20 },
+    // v1.69 — see interface. Default null = legacy row that pre-dates
+    // the per-program scoping; the migration script backfills these.
+    batchId: {
+      type: MongooseSchema.Types.ObjectId,
+      ref: 'Batch',
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true },
 );

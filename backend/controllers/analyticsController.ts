@@ -1,4 +1,6 @@
 import { Request, Response } from 'express';
+// v1.69 — Phase 3g: program-scope the analytics reads.
+import { withProgramScope } from '../utils/db/scopedQuery.js';
 import SearchLog from '../models/SearchLog.js';
 
 interface PopularQuery {
@@ -29,8 +31,9 @@ export const getFailedQueries = async (req: Request, res: Response): Promise<voi
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
+    const batchIdParam = (req.query.batchId as string | undefined) ?? null;
     const failedQueries = await SearchLog.aggregate([
-      { $match: { resultsCount: 0, createdAt: { $gte: sevenDaysAgo } } },
+      { $match: withProgramScope({ resultsCount: 0, createdAt: { $gte: sevenDaysAgo } }, batchIdParam) },
       {
         $group: {
           _id: { $toLower: '$query' },
@@ -61,9 +64,11 @@ export const getFailedQueries = async (req: Request, res: Response): Promise<voi
 export const getSearchAnalytics = async (req: Request, res: Response): Promise<void> => {
   if (!requireAdminOrMod(req, res)) return;
   try {
-    const totalSearches = await SearchLog.countDocuments();
+    const batchIdParam = (req.query.batchId as string | undefined) ?? null;
+    const totalSearches = await SearchLog.countDocuments(withProgramScope({}, batchIdParam));
 
     const popularQueries: PopularQuery[] = await SearchLog.aggregate([
+      ...(batchIdParam ? [{ $match: { batchId: new (await import('mongoose')).Types.ObjectId(batchIdParam) } }] : []),
       {
         $group: {
           _id: { $toLower: '$query' },
@@ -84,7 +89,7 @@ export const getSearchAnalytics = async (req: Request, res: Response): Promise<v
     ]);
 
     const failedQueries: FailedQuery[] = await SearchLog.aggregate([
-      { $match: { resultsCount: 0 } },
+      { $match: withProgramScope({ resultsCount: 0 }, batchIdParam) },
       {
         $group: {
           _id: { $toLower: '$query' },

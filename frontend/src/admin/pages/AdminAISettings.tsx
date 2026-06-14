@@ -3,7 +3,9 @@
  */
 
 import { useEffect, useState, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import adminApi from '../utils/adminApi';
+import { useBatch } from '../../context/BatchContext';
 
 interface ProviderOverride { hasKey: boolean; baseURL: string; model: string; }
 interface AiFeatureConfig { enabled: boolean; model: string; temperature: number; maxTokens: number; }
@@ -44,7 +46,18 @@ function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (
 }
 
 export default function AdminAISettings() {
+  // v1.69 — Phase 12: per-program AI config. When ?batchId=...
+  // is supplied in the URL, every read/write targets the
+  // per-program override (or auto-creates one on first save).
+  // The page surfaces a 'no override — falling back to global'
+  // hint when the resolver returns hasOverride:false so the
+  // admin knows their edits will be saved as an override.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeBatchId = searchParams.get('batchId');
+  const { availableBatches, currentBatch: activeProgram } = useBatch();
+
   const [config, setConfig] = useState<AiConfig | null>(null);
+  const [hasOverride, setHasOverride] = useState(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -67,9 +80,14 @@ export default function AdminAISettings() {
 
   const loadConfig = useCallback(async () => {
     try {
-      const res = await adminApi.get<AiConfig>('/admin/ai/config');
+      const res = await adminApi.get<AiConfig & { hasOverride?: boolean; source?: string }>('/admin/ai/config', {
+        params: activeBatchId ? { batchId: activeBatchId } : undefined,
+      });
       const data = res.data;
-      setConfig(data); setActiveProvider(data.activeProvider); setFeatures(data.features);
+      setConfig(data);
+      setActiveProvider(data.activeProvider);
+      setFeatures(data.features);
+      setHasOverride(data.hasOverride ?? true);
       setProviderDrafts(prev => {
         const next = { ...prev };
         for (const p of ['anthropic','openai','xai','minimax','gemini','custom'] as ProviderKey[]) {
@@ -79,7 +97,7 @@ export default function AdminAISettings() {
       });
     } catch { setError('Failed to load AI configuration.'); }
     finally { setLoading(false); }
-  }, []);
+  }, [activeBatchId]);
 
   useEffect(() => { loadConfig(); }, [loadConfig]);
 
@@ -90,14 +108,21 @@ export default function AdminAISettings() {
 
   const handleSaveFeatures = async () => {
     if (!features) return; setSaving(true); setError('');
-    try { await adminApi.patch('/admin/ai/config', { features }); setSuccess('AI feature settings saved.'); setHasChanges(false); loadConfig(); setTimeout(() => setSuccess(''), 3000); }
+    try {
+      await adminApi.patch('/admin/ai/config', { features, batchId: activeBatchId ?? null });
+      setSuccess('AI feature settings saved.'); setHasChanges(false); loadConfig(); setTimeout(() => setSuccess(''), 3000);
+    }
     catch { setError('Failed to save settings.'); }
     finally { setSaving(false); }
   };
 
   const handleSwitchProvider = async (provider: string) => {
     setSavingProvider(true); setError('');
-    try { await adminApi.patch('/admin/ai/config', { activeProvider: provider }); setActiveProvider(provider); setConfig(p => p ? { ...p, activeProvider: provider as any } : p); setSuccess(`Provider switched to ${PROVIDER_META[provider as ProviderKey].label}.`); setTimeout(() => setSuccess(''), 3000); }
+    try {
+      await adminApi.patch('/admin/ai/config', { activeProvider: provider, batchId: activeBatchId ?? null });
+      setActiveProvider(provider); setConfig(p => p ? { ...p, activeProvider: provider as any } : p);
+      setSuccess(`Provider switched to ${PROVIDER_META[provider as ProviderKey].label}.`); setTimeout(() => setSuccess(''), 3000);
+    }
     catch { setError('Failed to switch provider.'); }
     finally { setSavingProvider(false); }
   };
@@ -118,7 +143,10 @@ export default function AdminAISettings() {
   const handleSaveProviderDraft = async (provider: ProviderKey) => {
     const draft = providerDrafts[provider]; setSavingProviderDraft(provider); setError('');
     try {
-      const body: Record<string, unknown> = { providers: { [provider]: { baseURL: draft.baseURL, model: draft.model, ...(draft.apiKey ? { apiKey: draft.apiKey } : {}) } } };
+      const body: Record<string, unknown> = {
+        providers: { [provider]: { baseURL: draft.baseURL, model: draft.model, ...(draft.apiKey ? { apiKey: draft.apiKey } : {}) } },
+        batchId: activeBatchId ?? null,
+      };
       await adminApi.patch('/admin/ai/config', body);
       setSuccess(`${PROVIDER_META[provider].label} configuration saved.`);
       setProviderDrafts(prev => ({ ...prev, [provider]: { ...prev[provider], apiKey: '' } }));
@@ -130,7 +158,12 @@ export default function AdminAISettings() {
   const handleClearApiKey = async (provider: ProviderKey) => {
     if (!confirm(`Clear the stored API key for ${PROVIDER_META[provider].label}?`)) return;
     setSavingProviderDraft(provider); setError('');
-    try { await adminApi.patch('/admin/ai/config', { providers: { [provider]: { apiKey: '' } } }); setSuccess(`${PROVIDER_META[provider].label} API key cleared.`); setProviderDrafts(prev => ({ ...prev, [provider]: { ...prev[provider], apiKey: '' } })); setTimeout(() => setSuccess(''), 3000); loadConfig(); }
+    try {
+      await adminApi.patch('/admin/ai/config', { providers: { [provider]: { apiKey: '' } }, batchId: activeBatchId ?? null });
+      setSuccess(`${PROVIDER_META[provider].label} API key cleared.`);
+      setProviderDrafts(prev => ({ ...prev, [provider]: { ...prev[provider], apiKey: '' } }));
+      setTimeout(() => setSuccess(''), 3000); loadConfig();
+    }
     catch (err: any) { setError(err.response?.data?.message || 'Failed to clear API key.'); }
     finally { setSavingProviderDraft(null); }
   };
@@ -160,6 +193,55 @@ export default function AdminAISettings() {
   return (
     <div className="space-y-6 max-w-3xl">
       <p className="text-sm text-ink-faint -mt-2">Configure AI providers, API keys, custom endpoints, and per-feature parameters.</p>
+
+      {/* v1.69 — Phase 12: per-program scope selector. When a
+          program is picked, every read/write targets the
+          per-program override. Without a selection, the page
+          edits the global default. The 'no override' badge
+          surfaces when the resolver returned hasOverride:false
+          so the admin knows their next save will create one. */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-faint">
+          Scope:
+        </span>
+        <button
+          type="button"
+          onClick={() => { const next = new URLSearchParams(searchParams); next.delete('batchId'); setSearchParams(next); }}
+          className={`px-3 py-1 rounded-md text-xs font-medium ${
+            !activeBatchId ? 'bg-accent text-accent-text' : 'bg-mist text-ink-soft hover:bg-cream'
+          }`}
+        >
+          Global default
+        </button>
+        {availableBatches.map((b) => (
+          <button
+            key={b._id}
+            type="button"
+            onClick={() => { const next = new URLSearchParams(searchParams); next.set('batchId', b._id); setSearchParams(next); }}
+            className={`px-3 py-1 rounded-md text-xs font-medium ${
+              activeBatchId === b._id ? 'bg-accent text-accent-text' : 'bg-mist text-ink-soft hover:bg-cream'
+            }`}
+          >
+            {b.name}
+            {b.isDefault && <span className="ml-1 text-[9px] font-semibold uppercase">★</span>}
+          </button>
+        ))}
+        {activeBatchId && !hasOverride && (
+          <span className="text-[10px] font-medium uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-0.5">
+            ⚠ No per-program override — falling back to global
+          </span>
+        )}
+        {activeBatchId && hasOverride && (
+          <span className="text-[10px] font-medium uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-2 py-0.5">
+            ✓ Per-program override active
+          </span>
+        )}
+        {activeProgram && activeBatchId && (
+          <span className="text-[10px] text-ink-faint ml-auto">
+            Saving as per-program override for <span className="font-semibold text-ink">{activeProgram.name}</span>
+          </span>
+        )}
+      </div>
 
       {success && <div className="flex items-center gap-2 px-4 py-3 admin-toast-success rounded-xl text-sm"><span>✓</span> {success}</div>}
       {error   && <div className="flex items-center gap-2 px-4 py-3 admin-toast-error  rounded-xl text-sm"><span>✕</span> {error}</div>}

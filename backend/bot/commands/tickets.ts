@@ -2,16 +2,17 @@
  * bot/commands/tickets.ts — /tickets [status]
  *
  * Admin. Lists support tickets. Calls
- *   GET {PUBLIC_URL}/api/admin/support/requests?status=...
- * with the X-Internal-API-Key header (same key the
- * existing internal endpoints accept). Default status is
- * 'open'. Embeds one ticket per field for readability.
+ *   GET {PUBLIC_URL}/api/admin/support/requests?status=...&batchId=...
+ * with the X-Internal-API-Key header. Default status is
+ * 'open'. The batchId is threaded through (Phase 6+) so
+ * each per-program bot only lists its own tickets.
  */
 
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { isAdmin } from '../events/interactionCreate.js';
 import { logger } from '../../utils/http/logger.js';
 import type { BotConfig } from '../discordBot.js';
+import { buildBotApiUrl, botApiHeaders } from '../events/botApi.js';
 
 export const ticketsCommandData = new SlashCommandBuilder()
   .setName('tickets')
@@ -47,9 +48,17 @@ interface SupportTicket {
   isGolden?: boolean;
 }
 
+function errorEmbed(msg: string): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(0xff6b6b)
+    .setTitle('Error')
+    .setDescription(msg.slice(0, 1000));
+}
+
 export async function executeTickets(
   interaction: ChatInputCommandInteraction,
-  config: BotConfig
+  config: BotConfig,
+  batchId: string | null = null
 ): Promise<void> {
   if (!isAdmin(interaction, config)) {
     await interaction.reply({ content: '🔒 admin only', ephemeral: true });
@@ -69,9 +78,10 @@ export async function executeTickets(
 
   let tickets: SupportTicket[] = [];
   try {
+    const basePath = `/api/admin/support/requests?status=${encodeURIComponent(status)}&limit=${limit}`;
     const res = await fetch(
-      `${config.publicUrl}/api/admin/support/requests?status=${encodeURIComponent(status)}&limit=${limit}`,
-      { headers: { 'X-Internal-API-Key': config.internalApiKey } }
+      buildBotApiUrl(config, basePath, batchId),
+      { headers: { 'X-Internal-API-Key': config.internalApiKey, ...botApiHeaders(config, batchId) } }
     );
     if (res.ok) {
       const data = await res.json() as { requests?: SupportTicket[] };
@@ -114,11 +124,4 @@ export async function executeTickets(
   }
   embed.setFooter({ text: 'Use /resolve <id> <note> to close one.' });
   await interaction.followUp({ embeds: [embed] });
-}
-
-function errorEmbed(msg: string): EmbedBuilder {
-  return new EmbedBuilder()
-    .setColor(0xff6b6b)
-    .setTitle('Error')
-    .setDescription(msg.slice(0, 1000));
 }

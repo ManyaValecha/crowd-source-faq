@@ -92,7 +92,16 @@ export async function getPopularFaqs(req: Request, res: Response): Promise<void>
     res.status(400).json({ message: 'Invalid batchId.' });
     return;
   }
-  const cacheKey = `popular:${batchId ?? 'all'}:${limit}`;
+  // v1.69 — optional courseId filter. When the home-page course
+  // picker is active, the public endpoints only return that
+  // course's FAQs. Omitting courseId returns program-wide FAQs
+  // (legacy behaviour).
+  const courseId = parseCourseId(req.query.courseId);
+  if (req.query.courseId !== undefined && !courseId) {
+    res.status(400).json({ message: 'Invalid courseId.' });
+    return;
+  }
+  const cacheKey = `popular:${batchId ?? 'all'}:${courseId ?? 'all'}:${limit}`;
   const cached = popularCache.get(cacheKey);
   if (cached) {
     res.json(cached);
@@ -102,6 +111,7 @@ export async function getPopularFaqs(req: Request, res: Response): Promise<void>
   try {
     const filter: Record<string, unknown> = { status: 'approved' };
     if (batchId) filter.batchId = batchId;
+    if (courseId) filter.courseId = courseId;
     const faqs = await FAQ.find(filter)
       .select(PUBLIC_PROJECTION)
       .sort({ popularityScore: -1, createdAt: -1 })
@@ -132,7 +142,12 @@ export async function getRecentFaqs(req: Request, res: Response): Promise<void> 
     res.status(400).json({ message: 'Invalid batchId.' });
     return;
   }
-  const cacheKey = `recent:${batchId ?? 'all'}:${limit}`;
+  const courseId = parseCourseId(req.query.courseId);
+  if (req.query.courseId !== undefined && !courseId) {
+    res.status(400).json({ message: 'Invalid courseId.' });
+    return;
+  }
+  const cacheKey = `recent:${batchId ?? 'all'}:${courseId ?? 'all'}:${limit}`;
   const cached = recentCache.get(cacheKey);
   if (cached) {
     res.json(cached);
@@ -142,6 +157,7 @@ export async function getRecentFaqs(req: Request, res: Response): Promise<void> 
   try {
     const filter: Record<string, unknown> = { status: 'approved' };
     if (batchId) filter.batchId = batchId;
+    if (courseId) filter.courseId = courseId;
     const faqs = await FAQ.find(filter)
       .select(PUBLIC_PROJECTION)
       .sort({ createdAt: -1 })
@@ -175,7 +191,12 @@ export async function getCategories(req: Request, res: Response): Promise<void> 
     res.status(400).json({ message: 'Invalid batchId.' });
     return;
   }
-  const cacheKey = `cats:${batchId ?? 'all'}:${includeTop ? topN : 0}`;
+  const courseId = parseCourseId(req.query.courseId);
+  if (req.query.courseId !== undefined && !courseId) {
+    res.status(400).json({ message: 'Invalid courseId.' });
+    return;
+  }
+  const cacheKey = `cats:${batchId ?? 'all'}:${courseId ?? 'all'}:${includeTop ? topN : 0}`;
   const cached = categoriesCache.get(cacheKey);
   if (cached) {
     res.json(cached);
@@ -186,6 +207,7 @@ export async function getCategories(req: Request, res: Response): Promise<void> 
     // Aggregate: group by category, count, sort by count desc
     const matchStage: Record<string, unknown> = { status: 'approved' };
     if (batchId) matchStage.batchId = batchId;
+    if (courseId) matchStage.courseId = courseId;
     const grouped = await FAQ.aggregate<{ _id: string; count: number }>([
       { $match: matchStage },
       { $group: { _id: '$category', count: { $sum: 1 } } },
@@ -202,6 +224,7 @@ export async function getCategories(req: Request, res: Response): Promise<void> 
       if (!g._id) continue;
       const catFilter: Record<string, unknown> = { status: 'approved', category: g._id };
       if (batchId) catFilter.batchId = batchId;
+      if (courseId) catFilter.courseId = courseId;
       const cat: { name: string; count: number; topFaqs?: ReturnType<typeof shapeFaq>[] } = {
         name: g._id,
         count: g.count,
@@ -275,6 +298,11 @@ export async function searchPublicFaqs(req: Request, res: Response): Promise<voi
     res.status(400).json({ message: 'Invalid batchId.' });
     return;
   }
+  const courseId = parseCourseId(req.query.courseId);
+  if (req.query.courseId !== undefined && !courseId) {
+    res.status(400).json({ message: 'Invalid courseId.' });
+    return;
+  }
 
   if (q.length < 2) {
     res.status(400).json({ message: 'Query must be at least 2 characters.' });
@@ -301,6 +329,7 @@ export async function searchPublicFaqs(req: Request, res: Response): Promise<voi
     };
     if (category) filter.category = category;
     if (batchId) filter.batchId = batchId;
+    if (courseId) filter.courseId = courseId;
 
     const faqs = await FAQ.find(filter)
       .select(PUBLIC_PROJECTION)
@@ -625,6 +654,15 @@ function clampInt(v: unknown, min: number, max: number, fallback: number): numbe
 
 /** Parse and validate a batchId query param. Returns null if absent or invalid. */
 function parseBatchId(v: unknown): Types.ObjectId | null {
+  if (typeof v !== 'string' || v.length === 0) return null;
+  if (!Types.ObjectId.isValid(v)) return null;
+  return new Types.ObjectId(v);
+}
+
+// v1.69 — same parser for courseId. Course scoping is an OPTIONAL
+// filter on every public read — if absent, the response is
+// program-wide (unchanged behaviour from before courses existed).
+function parseCourseId(v: unknown): Types.ObjectId | null {
   if (typeof v !== 'string' || v.length === 0) return null;
   if (!Types.ObjectId.isValid(v)) return null;
   return new Types.ObjectId(v);

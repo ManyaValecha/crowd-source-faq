@@ -25,8 +25,71 @@ const ZOOM_API_BASE    = 'https://api.zoom.us/v2';
 // Lazy getters — read process.env directly (avoids module-level capture timing issues)
 // Only validate when first called, after dotenv has loaded all env files
 function getClientId()     { const v = process.env.ZOOM_CLIENT_ID;     if (!v) throw new Error('Missing ZOOM_CLIENT_ID env var — add it to backend/.env.local');     return v; }
-function getClientSecret() { const v = process.env.ZOOM_CLIENT_SECRET; if (!v) throw new Error('Missing ZOOM_CLIENT_SECRET env var — add it to backend/.env.local'); return v; }
+function getClientSecret() { const v = process.env.ZOOM_CLIENT_SECRET; if (!v) throw new Error('Missing ZOOM_CLIENT_SECRET env var — add it to backend/.env.local');     return v; }
 function getRedirectUri()  { return process.env.ZOOM_REDIRECT_URI ?? 'http://localhost:6767/api/zoom/auth/callback'; }
+
+/**
+ * v1.69 — Phase 5: per-program Zoom credential resolver.
+ *
+ * Each program can carry its own Zoom OAuth app registration in
+ * `ProgramConfig.zoom` (clientId/clientSecret/webhookSecretToken/
+ * accessToken/refreshToken, encrypted at rest). When `batchId`
+ * is supplied, this helper returns the per-program credentials
+ * (decrypted), falling back to the env-var-backed global app
+ * when the program has nothing configured. When `batchId` is
+ * null, it returns the env-var global app.
+ *
+ * Call sites that need the per-program credentials pass the
+ * meeting's batchId. Until the per-program Zoom rewrite lands
+ * in Phase 5+, the runtime uses the env-var-backed global app
+ * (Phase 5a). The admin endpoint at
+ * `/api/admin/programs/:id/zoom` stores per-program credentials
+ * in `ProgramConfig.zoom` ready for the runtime switchover.
+ */
+export interface ResolvedZoomConfig {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+  webhookSecretToken: string;
+  source: 'program' | 'env';
+  batchId: string | null;
+}
+
+export async function getProgramZoomConfig(
+  batchId: string | null = null
+): Promise<ResolvedZoomConfig> {
+  if (batchId) {
+    try {
+      // v1.69 — Phase 5: dynamic import so the file can be
+      // loaded even when the program is mid-migration and the
+      // ProgramConfig model hasn't been created yet.
+      const { default: ProgramConfig } = await import('../../models/ProgramConfig.js');
+      const { decrypt } = await import('../../utils/auth/crypto.js');
+      const doc = await ProgramConfig.findOne({ batchId }).select('+zoom.clientSecret +zoom.webhookSecretToken +zoom.accessToken +zoom.refreshToken').lean();
+      if (doc?.zoom?.clientId && doc.zoom.clientSecret) {
+        return {
+          clientId: doc.zoom.clientId,
+          clientSecret: decrypt(doc.zoom.clientSecret),
+          redirectUri: doc.zoom.redirectUri ?? getRedirectUri(),
+          webhookSecretToken: doc.zoom.webhookSecretToken ? decrypt(doc.zoom.webhookSecretToken) : '',
+          source: 'program',
+          batchId,
+        };
+      }
+    } catch (err) {
+      // ProgramConfig model not available or decryption failed —
+      // fall through to the env-var global app.
+    }
+  }
+  return {
+    clientId: getClientId(),
+    clientSecret: getClientSecret(),
+    redirectUri: getRedirectUri(),
+    webhookSecretToken: process.env.ZOOM_WEBHOOK_SECRET_TOKEN ?? '',
+    source: 'env',
+    batchId,
+  };
+}
 
 /**
  * Build the Zoom OAuth redirect URI dynamically, based on the incoming request
@@ -147,11 +210,23 @@ export function verifyOAuthState(state: string): string | null {
   }
 }
 
-export function buildZoomAuthUrl(internalUserId: string, request?: { headers?: Record<string, string | string[] | undefined>; protocol?: string }): string {
+/**
+ * v1.69 — Phase 5 runtime: per-program Zoom OAuth flow.
+ * When `batchId` is supplied, the URL is built with the
+ * per-program Zoom app's client_id (resolved via
+ * getProgramZoomConfig). When null, the env-var-backed
+ * global Zoom app is used (backwards compat).
+ */
+export async function buildZoomAuthUrl(
+  internalUserId: string,
+  request?: { headers?: Record<string, string | string[] | undefined>; protocol?: string },
+  batchId: string | null = null
+): Promise<string> {
   const redirectUri = buildDynamicRedirectUri(request);
+  const cfg = await getProgramZoomConfig(batchId);
   const params = new URLSearchParams({
     response_type: 'code',
-    client_id: getClientId(),
+    client_id: cfg.clientId,
     redirect_uri: redirectUri,
     state: signOAuthState(internalUserId),
   });
@@ -172,9 +247,18 @@ interface ZoomTokens {
  * Exchange an authorization code for Zoom tokens.
  * Protected by the zoomOAuth circuit breaker.
  */
-export async function exchangeCodeForTokens(code: string): Promise<ZoomTokens> {
+/**
+ * v1.69 — Phase 5 runtime: per-program token exchange.
+ * When `batchId` is supplied, the per-program Zoom app's
+ * client_id/secret is used (resolved via
+ * getProgramZoomConfig). The user's stored OAuth token is
+ * then scoped to that program — every subsequent API call
+ * via that token operates against the program's Zoom app.
+ */
+export async function exchangeCodeForTokens(code: string, batchId: string | null = null): Promise<ZoomTokens> {
+  const cfg = await getProgramZoomConfig(batchId);
   return await zoomOAuthCircuit.execute(async () => {
-    const credentials = Buffer.from(`${getClientId()}:${getClientSecret()}`).toString('base64');
+    const credentials = Buffer.from(`${cfg.clientId}:${cfg.clientSecret}`).toString('base64');
 
     const res = await fetch(`${ZOOM_TOKEN_URL}?grant_type=authorization_code&code=${code}&redirect_uri=${encodeURIComponent(getRedirectUri())}`, {
       method: 'POST',
@@ -197,9 +281,16 @@ export async function exchangeCodeForTokens(code: string): Promise<ZoomTokens> {
  * Refresh a user's Zoom tokens using their stored refresh token.
  * Protected by the zoomOAuth circuit breaker.
  */
-export async function refreshZoomTokens(refreshToken: string): Promise<ZoomTokens> {
+/**
+ * v1.69 — Phase 5 runtime: per-program token refresh.
+ * When `batchId` is supplied, the per-program Zoom app's
+ * client_id/secret is used. The refreshed token is
+ * re-bound to that program in the User doc.
+ */
+export async function refreshZoomTokens(refreshToken: string, batchId: string | null = null): Promise<ZoomTokens> {
+  const cfg = await getProgramZoomConfig(batchId);
   return await zoomOAuthCircuit.execute(async () => {
-    const credentials = Buffer.from(`${getClientId()}:${getClientSecret()}`).toString('base64');
+    const credentials = Buffer.from(`${cfg.clientId}:${cfg.clientSecret}`).toString('base64');
 
     const res = await fetch(`${ZOOM_TOKEN_URL}?grant_type=refresh_token&refresh_token=${refreshToken}`, {
       method: 'POST',
