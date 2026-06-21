@@ -25,6 +25,7 @@ import {
   formatCategoryName,
   getCategoryTone,
   getQuestionTitle,
+  applyQuestionNumbers,
 } from '../components/faq/faqUtils';
 import SearchDropdown from '../components/faq/SearchDropdown';
 import SearchFeedback from '../components/faq/SearchFeedback';
@@ -74,7 +75,7 @@ export default function FAQPage() {
     api.get('/faq', { params: { batchId } })
       .then((res) => {
         if (!mounted) return;
-        setGrouped(res.data.grouped || {});
+        setGrouped(applyQuestionNumbers(res.data.grouped || {}));
         setTotal(res.data.total || 0);
       })
       .catch((err: unknown) => {
@@ -88,7 +89,13 @@ export default function FAQPage() {
   }, [batchId]);
 
   // ── Derived data ─────────────────────────────────────────────────────────
-  const categories = useMemo(() => Object.keys(grouped).sort(), [grouped]);
+  const categories = useMemo(() => Object.keys(grouped).sort((a, b) => {
+    // Order by the dynamic categoryNumber assigned in applyQuestionNumbers
+    // so the 1, 2, 3… labels stay in sync with display order.
+    const an = grouped[a]?.[0]?.categoryNumber ?? 0;
+    const bn = grouped[b]?.[0]?.categoryNumber ?? 0;
+    return an - bn;
+  }), [grouped]);
 
   const flatQuestions = useMemo(() => (
     categories.flatMap((name) => (grouped[name] || []).map((item) => ({
@@ -335,7 +342,7 @@ export default function FAQPage() {
                       : 'bg-card text-ink border-border/70 hover:bg-cream hover:-translate-y-0.5'
                   }`}
                 >
-                  {formatCategoryName(cat)} · {count}
+                  {grouped[cat]?.[0]?.categoryNumber ? `${grouped[cat][0].categoryNumber}. ` : ''}{formatCategoryName(cat)} · {count}
                 </button>
               );
             })}
@@ -355,7 +362,7 @@ export default function FAQPage() {
           <div className="mt-8 rounded-2xl bg-danger-light border border-danger/15 p-6 text-center space-y-3">
             <p className="text-sm text-danger font-medium">{error}</p>
             <button
-              onClick={() => { setError(''); setLoading(true); api.get('/faq').then(res => { setGrouped(res.data.grouped || {}); setTotal(res.data.total || 0); }).catch((err: unknown) => { const m = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Failed to load FAQs.'; setError(m); }).finally(() => setLoading(false)); }}
+              onClick={() => { setError(''); setLoading(true); api.get('/faq').then(res => { setGrouped(applyQuestionNumbers(res.data.grouped || {})); setTotal(res.data.total || 0); }).catch((err: unknown) => { const m = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || 'Failed to load FAQs.'; setError(m); }).finally(() => setLoading(false)); }}
               className="px-5 py-2 text-sm font-medium bg-danger text-accent-text rounded-full hover:bg-danger/90 transition-colors"
             >
               Retry
@@ -424,7 +431,7 @@ export default function FAQPage() {
                 <span className={`w-9 h-9 rounded-xl bg-mist flex items-center justify-center ${getCategoryTone(activeCategory).accent}`}>
                   {getCategoryIcon(activeCategory)}
                 </span>
-                {formatCategoryName(activeCategory)}
+                {activeCategoryItems[0]?.categoryNumber ? `${activeCategoryItems[0].categoryNumber}. ` : ''}{formatCategoryName(activeCategory)}
                 <span className="ml-1 text-[11px] uppercase tracking-wider font-semibold text-ink-faint">
                   · {activeCategoryItems.length} {activeCategoryItems.length === 1 ? 'question' : 'questions'}
                 </span>
@@ -480,7 +487,7 @@ export default function FAQPage() {
 
                       {/* Card Title */}
                       <h3 className="text-base font-semibold text-ink leading-snug mb-4 line-clamp-2 group-hover:text-accent transition-colors duration-200">
-                        {formatCategoryName(cat)}
+                        {items[0]?.categoryNumber ? `${items[0].categoryNumber}. ` : ''}{formatCategoryName(cat)}
                       </h3>
 
                       {/* Top Questions List */}
@@ -500,7 +507,7 @@ export default function FAQPage() {
                                 className="text-xs text-ink-soft hover:text-accent flex gap-1.5 leading-snug transition-colors duration-200"
                               >
                                 <span className="text-ink-faint shrink-0 tabular-nums">
-                                  {idx + 1}.
+                                  {item.questionNumber ? `${item.questionNumber}` : `${idx + 1}.`}
                                 </span>
                                 <span className="truncate">
                                   {getQuestionTitle(item)}
