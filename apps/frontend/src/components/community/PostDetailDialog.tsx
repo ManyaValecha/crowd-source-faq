@@ -4,7 +4,8 @@ import Avatar from '../ui/Avatar';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
 import api, { friendlyError } from '../../utils/api';
-import { buildTransformedUrl, type CloudinaryAsset } from '../../hooks/useCloudinaryUpload';
+import { buildGcsTransformedUrl } from '../../utils/gcsTransform';
+import type { GcsAsset } from '../../hooks/useGcsUpload';
 import type { Post, Comment } from '../../types/ui';
 import { idMatches } from '../../utils/idMatch';
 
@@ -24,7 +25,7 @@ interface PostDetailDialogProps {
 
 
 // ── Attachment Lightbox ───────────────────────────────────────────────────────
-interface LightboxProps { assets: CloudinaryAsset[]; startIndex: number; onClose: () => void; }
+interface LightboxProps { assets: GcsAsset[]; startIndex: number; onClose: () => void; }
 function AttachmentLightbox({ assets, startIndex, onClose }: LightboxProps) {
   const [idx, setIdx] = useState(startIndex);
   useEffect(() => {
@@ -45,7 +46,7 @@ function AttachmentLightbox({ assets, startIndex, onClose }: LightboxProps) {
         <button className="absolute right-4 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white text-lg transition-colors" onClick={e => { e.stopPropagation(); setIdx(i => (i + 1) % assets.length); }}>›</button>
       </>}
       <img
-        src={buildTransformedUrl(a.url, 'w_1600,c_limit,q_auto,f_auto')}
+        src={buildGcsTransformedUrl(a.url, 'w_1600,c_limit,q_auto,f_auto')}
         alt={`Attachment ${idx + 1}`}
         className="max-w-[90vw] max-h-[85vh] object-contain rounded-xl shadow-2xl"
         onClick={e => e.stopPropagation()}
@@ -62,7 +63,7 @@ function AttachmentLightbox({ assets, startIndex, onClose }: LightboxProps) {
 }
 
 // ── Attachment Grid ───────────────────────────────────────────────────────────
-interface AttachmentGridProps { assets: CloudinaryAsset[]; onPreview: (index: number) => void; }
+interface AttachmentGridProps { assets: GcsAsset[]; onPreview: (index: number) => void; }
 function AttachmentGrid({ assets, onPreview }: AttachmentGridProps) {
   if (!assets.length) return null;
   const visible = assets.slice(0, 4);
@@ -71,12 +72,12 @@ function AttachmentGrid({ assets, onPreview }: AttachmentGridProps) {
     <div className="mt-4 grid gap-2" style={{ gridTemplateColumns: assets.length === 1 ? '1fr' : 'repeat(2, 1fr)' }}>
       {visible.map((a, i) => (
         <button
-          key={a.publicId}
+          key={a.objectPath}
           onClick={() => onPreview(i)}
           className="relative rounded-xl overflow-hidden border border-border bg-mist aspect-video hover:opacity-90 transition-opacity group"
         >
           <img
-            src={buildTransformedUrl(a.url, 'w_800,h_450,c_fill,q_auto,f_auto')}
+            src={buildGcsTransformedUrl(a.url, 'w_800,h_450,c_fill,q_auto,f_auto')}
             alt={`Attachment ${i + 1}`}
             className="w-full h-full object-cover"
             loading="lazy"
@@ -459,7 +460,7 @@ export default function PostDetailDialog({ post: initialPost, onClose, currentUs
   const [showReportModal, setShowReportModal] = useState(false);
   const [reportReason, setReportReason] = useState('');
   const [reportLoading, setReportLoading] = useState(false);
-  const [lightboxAssets, setLightboxAssets] = useState<CloudinaryAsset[]>([]);
+  const [lightboxAssets, setLightboxAssets] = useState<GcsAsset[]>([]);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [showShareMenu, setShowShareMenu] = useState(false);
   const isAnswered = post.status === 'answered';
@@ -468,7 +469,7 @@ export default function PostDetailDialog({ post: initialPost, onClose, currentUs
     id => idMatches(id, currentUserId)
   ) ?? false;
   const canResolve = userRole === 'admin' || userRole === 'moderator';
-  const attachments = (post as Post & { attachments?: CloudinaryAsset[] }).attachments ?? [];
+  const attachments = (post as Post & { attachments?: GcsAsset[] }).attachments ?? [];
 
   useEffect(() => {
     const dialog = dialogRef.current;

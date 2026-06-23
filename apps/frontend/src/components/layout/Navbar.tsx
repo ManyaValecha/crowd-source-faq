@@ -3,7 +3,7 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { useAuthModal, useAuthGate } from '../../context/AuthModalContext';
 import { useFeatureFlag } from '../../context/FeatureFlagContext';
-import { buildTransformedUrl } from '../../hooks/useCloudinaryUpload';
+import { buildGcsTransformedUrl } from '../../utils/gcsTransform';
 import NotificationBell from '../../components/notifications/NotificationBell';
 import SpurtiChip from './SpurtiChip';
 import ZoomBubble from '../welcome/ZoomBubble';
@@ -147,7 +147,7 @@ export default function Navbar({ showProgramSwitcher: _showProgramSwitcher = fal
   // downloading the full-size upload on every page. Cloudinary returns
   // a transformed URL, no extra round-trip.
   const avatarSrc = user?.avatar?.url
-    ? buildTransformedUrl(user.avatar.url, 'w_64,h_64,c_fill,g_auto,q_auto,f_auto')
+    ? buildGcsTransformedUrl(user.avatar.url, 'w_64,h_64,c_fill,g_auto,q_auto,f_auto')
     : undefined;
   const isCommunityActive = location.pathname === '/community';
 

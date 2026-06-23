@@ -2,7 +2,7 @@ import React from 'react';
 import Badge from '../ui/Badge';
 import { useAuth } from '../../hooks/useAuth';
 import type { Post } from '../../types/ui';
-import { buildTransformedUrl, type CloudinaryAsset } from '../../hooks/useCloudinaryUpload';
+import { buildGcsTransformedUrl } from '../../utils/gcsTransform';
 import { idMatches } from '../../utils/idMatch';
 
 const formatDate = (dateStr: string): string => {
@@ -96,14 +96,14 @@ export default function CommunityPostCard({ post, onClick, currentUserId, onTogg
 
         {/* Image attachments — Cloudinary thumbnails */}
         {(() => {
-          const atts = (post as Post & { attachments?: CloudinaryAsset[] }).attachments;
+          const atts = (post as Post & { attachments?: Array<{ url: string; objectPath?: string; publicId?: string }> }).attachments;
           if (!Array.isArray(atts) || atts.length === 0) return null;
           return (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {atts.slice(0, 4).map((a) => (
-                <div key={a.publicId} className="w-14 h-14 rounded-lg overflow-hidden border border-border bg-mist">
+                <div key={a.objectPath ?? a.publicId} className="w-14 h-14 rounded-lg overflow-hidden border border-border bg-mist">
                   <img
-                    src={buildTransformedUrl(a.url, 'w_120,h_120,c_fill,q_auto,f_auto')}
+                    src={buildGcsTransformedUrl(a.url, 'w_120,h_120,c_fill,q_auto,f_auto')}
                     alt="attachment"
                     className="w-full h-full object-cover"
                     loading="lazy"

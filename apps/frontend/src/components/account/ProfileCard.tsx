@@ -12,7 +12,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../../hooks/useAuth';
-import { useCloudinaryUpload } from '../../hooks/useCloudinaryUpload';
+import { useGcsUpload } from '../../hooks/useGcsUpload';
 import api from '../../utils/api';
 import Avatar from '../ui/Avatar';
 import Input from '../ui/Input';
@@ -31,7 +31,7 @@ export default function ProfileCard() {
   const [avatarError, setAvatarError] = useState('');
   const [avatarSuccess, setAvatarSuccess] = useState('');
 
-  const { upload: uploadAvatar, uploading: avatarUploading, error: avatarUploadError } = useCloudinaryUpload('avatar');
+  const { upload: uploadAvatar, uploading: avatarUploading, error: avatarUploadError } = useGcsUpload('avatar');
 
   useEffect(() => {
     if (user) setForm({ name: user.name ?? '', email: user.email ?? '' });
@@ -45,8 +45,8 @@ export default function ProfileCard() {
     setAvatarSuccess('');
     try {
       const asset = await uploadAvatar(file);
-      const res = await api.patch<{ user: { id: string; name: string; email: string; role: string; avatar: { url: string; publicId: string } } }>('/auth/profile', {
-        avatar: { url: asset.url, publicId: asset.publicId },
+      const res = await api.patch<{ user: { id: string; name: string; email: string; role: string; avatar: { url: string; gcsUri: string; objectPath: string } } }>('/auth/profile', {
+        avatar: { url: asset.url, gcsUri: asset.gcsUri, objectPath: asset.objectPath },
       });
       const stored = localStorage.getItem('yaksha_user');
       if (stored) {

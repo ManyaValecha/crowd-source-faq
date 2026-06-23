@@ -5,7 +5,8 @@ import api, { friendlyError } from '../../utils/api';
 import type { Post } from '../../types/ui';
 import { useAuth } from '../../hooks/useAuth';
 import { useAuthModal } from '../../context/AuthModalContext';
-import { useCloudinaryUpload, buildTransformedUrl, type CloudinaryAsset } from '../../hooks/useCloudinaryUpload';
+import { useGcsUpload, type GcsAsset } from '../../hooks/useGcsUpload';
+import { buildGcsTransformedUrl } from '../../utils/gcsTransform';
 
 interface CreatePostDialogProps {
   onClose: () => void;
@@ -34,10 +35,10 @@ export default function CreatePostDialog({ onClose, onCreated, prefillTitle = ''
   const navigate = useNavigate();
   const DRAFT_KEY = 'yaksha_post_draft';
 
-  // ── Cloudinary attachments ──
-  const { upload: uploadAttachment, uploading: attaching, error: attachmentError } = useCloudinaryUpload('posts');
+  // ── GCS attachments ──
+  const { upload: uploadAttachment, uploading: attaching, error: attachmentError } = useGcsUpload('posts');
   const attachmentInputRef = useRef<HTMLInputElement>(null);
-  const [attachments, setAttachments] = useState<CloudinaryAsset[]>([]);
+  const [attachments, setAttachments] = useState<GcsAsset[]>([]);
   const MAX_ATTACHMENTS = 4;
   const handlePickAttachment = () => attachmentInputRef.current?.click();
   const handleAttachmentFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -54,8 +55,8 @@ export default function CreatePostDialog({ onClose, onCreated, prefillTitle = ''
       }
     }
   };
-  const removeAttachment = (publicId: string) => {
-    setAttachments((prev) => prev.filter((a) => a.publicId !== publicId));
+  const removeAttachment = (objectPath: string) => {
+    setAttachments((prev) => prev.filter((a) => a.objectPath !== objectPath));
   };
 
   // Restore draft from sessionStorage on mount
@@ -180,7 +181,8 @@ export default function CreatePostDialog({ onClose, onCreated, prefillTitle = ''
         // Cloudinary response has more (eager, etc.) that we don't save.
         attachments: attachments.map((a) => ({
           url: a.url,
-          publicId: a.publicId,
+          gcsUri: a.gcsUri,
+          objectPath: a.objectPath,
           width: a.width,
           height: a.height,
           format: a.format,
@@ -400,15 +402,15 @@ export default function CreatePostDialog({ onClose, onCreated, prefillTitle = ''
             </label>
             <div className="flex flex-wrap gap-2">
               {attachments.map((a) => (
-                <div key={a.publicId} className="relative w-16 h-16 rounded-lg overflow-hidden border border-border bg-mist group">
+                <div key={a.objectPath} className="relative w-16 h-16 rounded-lg overflow-hidden border border-border bg-mist group">
                   <img
-                    src={buildTransformedUrl(a.url, 'w_120,h_120,c_fill,q_auto,f_auto')}
+                    src={buildGcsTransformedUrl(a.url, 'w_120,h_120,c_fill,q_auto,f_auto')}
                     alt="attachment preview"
                     className="w-full h-full object-cover"
                   />
                   <button
                     type="button"
-                    onClick={() => removeAttachment(a.publicId)}
+                    onClick={() => removeAttachment(a.objectPath)}
                     aria-label="Remove attachment"
                     className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-ink/70 text-accent-text text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                   >

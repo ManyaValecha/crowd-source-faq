@@ -8,8 +8,8 @@ import ThreadActivityTimeline, { type LifecycleStatusHistoryEntry } from './Thre
 import ThreadBookmarkButton from './ThreadBookmarkButton';
 import ThreadShareButton from './ThreadShareButton';
 import type { Post } from '../../types/ui';
-import type { CloudinaryAsset } from '../../hooks/useCloudinaryUpload';
-import { buildTransformedUrl } from '../../hooks/useCloudinaryUpload';
+import type { GcsAsset } from '../../hooks/useGcsUpload';
+import { buildGcsTransformedUrl } from '../../utils/gcsTransform';
 import { useAuth } from '../../hooks/useAuth';
 import { useAuthGate } from '../../context/AuthModalContext';
 import { LIFECYCLE_CONFIG, formatDate, DEPTH_COLORS, DEPTH_BARS } from '../ui/threadUtils';
@@ -549,18 +549,18 @@ export default function ThreadDetail({ postId, onClose }: ThreadDetailProps) {
 
                     {/* Attachment thumbnails */}
                     {(() => {
-                      const atts = (post as unknown as { attachments?: CloudinaryAsset[] }).attachments;
+                      const atts = (post as unknown as { attachments?: GcsAsset[] }).attachments;
                       if (!atts?.length) return null;
                       return (
                         <div className="mt-4 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(atts.length, 2)}, 1fr)` }}>
                           {atts.map((a, i) => (
                             <button
-                              key={a.publicId}
+                              key={a.objectPath}
                               onClick={() => {/* lightbox — future */}}
                               className="relative rounded-xl overflow-hidden border border-border bg-mist aspect-video hover:opacity-85 transition-opacity"
                             >
                               <img
-                                src={buildTransformedUrl(a.url, 'w_800,h_450,c_fill,q_auto,f_auto')}
+                                src={buildGcsTransformedUrl(a.url, 'w_800,h_450,c_fill,q_auto,f_auto')}
                                 alt="attachment"
                                 className="w-full h-full object-cover"
                                 loading="lazy"
