@@ -35,6 +35,7 @@ jobs:
             export INFISICAL_API_URL="${{ env.INFISICAL_API_URL }}"
             export INFISICAL_TOKEN="${{ secrets.INFISICAL_TOKEN }}"
             npx @infisical/cli@0.43.40 export \
+              --projectId="${{ secrets.INFISICAL_PROJECT_ID }}" \
               --env="${{ env.INFISICAL_ENVIRONMENT }}" \
               --path="${{ env.INFISICAL_SECRET_PATH }}" \
               --format=dotenv > apps/backend/.env
